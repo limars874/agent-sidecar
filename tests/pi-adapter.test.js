@@ -12,6 +12,7 @@ test('Pi session: active branch only, roles mapped, partial last line ignored', 
   const t = readPiSession(PI_SESSION);
   assert.equal(t.session, PI_SESSION_ID);
   assert.equal(t.cwd, '/work/demo');
+  assert.equal(t.model, 'anthropic/m', 'latest assistant reply on the branch');
   assert.deepEqual(t.messages, [
     { role: 'user', text: 'List the files' },
     { role: 'assistant', text: 'Listing.\n→ bash {"command":"ls"}' },

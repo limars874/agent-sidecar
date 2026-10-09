@@ -40,8 +40,20 @@ export function readPiSession(file) {
   return {
     session: header.id,
     cwd: header.cwd ?? null,
+    model: lastModel(branch),
     messages: branch.filter((e) => e.type === 'message').map((e) => toMessage(e.message)).filter(Boolean),
   };
+}
+
+// The session's current model: the latest model switch or assistant reply on the branch.
+function lastModel(branch) {
+  let model = null;
+  for (const e of branch) {
+    if (e.type === 'model_change' && e.provider && e.modelId) model = `${e.provider}/${e.modelId}`;
+    const m = e.type === 'message' ? e.message : null;
+    if (m?.role === 'assistant' && m.provider && m.model) model = `${m.provider}/${m.model}`;
+  }
+  return model;
 }
 
 function toMessage(m) {

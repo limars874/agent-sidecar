@@ -39,12 +39,13 @@ An adapter is one entry in `adapters/index.js`:
 ```js
 {
   name: 'pi',
-  readTranscript(transcriptRef) → { session, cwd, messages: [{ role, text, name? }] },
+  readTranscript(transcriptRef) → { session, cwd, model, messages: [{ role, text, name? }] },
   callModel({ model, prompt, timeoutMs, env }) → string,
 }
 ```
 
 - `readTranscript` returns the session's **active branch** only, oldest first. `role` is `user`, `assistant` or `tool`. A turn starts at each `user` message. `name` is the tool name for `tool` messages. Assistant tool calls are rendered into the assistant's `text` (Pi: `→ bash {"command":"ls"}`). Hidden reasoning is left out.
+- `model` is the session's current model as far as the transcript shows it (Pi: the latest model switch or assistant reply on the branch), or null. `agent-sidecar run` uses it as the session model when `--model` is not given.
 - `callModel` makes one non-interactive call with no tools and returns the reply text. It must not trigger the adapter's own event reporting (Pi: `--no-extensions` plus `AGENT_SIDECAR_CHILD=1`).
 - Both run synchronously inside a short-lived CLI process.
 
@@ -180,7 +181,7 @@ One tree for every agent. Root: `$AGENT_SIDECAR_HOME`, default `~/.agent-sidecar
 | Command | Effect | Output |
 |---|---|---|
 | `agent-sidecar event [--json <event>] [--foreground]` | Validate the event, lock the session, schedule due items, write the job, start a detached `work` process (or run it in this process with `--foreground`). Returns quickly. | `{ job, turn, scheduled: [names], skipped: [{name, reason}] }` |
-| `agent-sidecar run <item> --agent <a> --session <ref> [--model <m>] [--pane <id>] [--from-turn <n>] [--to-turn <n>] [--dry-run]` | Run one item now over a transcript, ignoring `everyTurns`. Does not move cursors or mark anything running. Range defaults: `context: session` → `0..last`; `delta` → `cursor..last`. `--model` stands in for the session model. `--dry-run` prints the prompt instead of calling the model. | `{ item, model, fromTurn, toTurn, text, output }` or `{ …, prompt }` |
+| `agent-sidecar run <item> --agent <a> --session <ref> [--model <m>] [--pane <id>] [--from-turn <n>] [--to-turn <n>] [--dry-run]` | Run one item now over a transcript, ignoring `everyTurns`. Does not move cursors or mark anything running. Range defaults: `context: session` → `0..last`; `delta` → `cursor..last`. `--model` stands in for the session model; without it, the model recorded in the transcript is used. `--dry-run` prints the prompt instead of calling the model. | `{ item, model, fromTurn, toTurn, text, output }` or `{ …, prompt }` |
 | `agent-sidecar items` | Load and check all items. | One JSON line per valid item; errors on stderr |
 | `agent-sidecar work <job-file>` | Internal: run a scheduled job. | JSON array of run records |
 

@@ -133,7 +133,7 @@ export function runManual({ name, agent, sessionFile, model, pane, fromTurn, toT
   const transcript = adapter.readTranscript(sessionFile);
   const turns = countTurns(transcript.messages);
   const event = validateEvent(
-    { v: 1, agent, session: transcript.session, transcriptRef: sessionFile, model: model ?? null, pane: pane ?? null, turn: turns },
+    { v: 1, agent, session: transcript.session, transcriptRef: sessionFile, model: model ?? transcript.model ?? null, pane: pane ?? null, turn: turns },
     Object.keys(ADAPTERS),
   );
   const dir = sessionDir(root, agent, event.session);

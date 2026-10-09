@@ -125,6 +125,12 @@ test('run: manual run and dry run over a session file, cursor untouched', (t) =>
   assert.match(fs.readFileSync(path.join(box.root, 'out', 'pi', PI_SESSION_ID, 'summary.md'), 'utf8'), /manual summary/);
   assert.equal(fs.existsSync(path.join(box.stateDir(), 'state.json')), false, 'run does not schedule or move cursors');
 
+  // Without --model, an item with no model of its own uses the model recorded in the session.
+  box.item('plain.md', '---\neveryTurns: 1\n---\nNote it.');
+  const plain = cli(['run', 'plain', '--agent', 'pi', '--session', PI_SESSION, '--dry-run'], box.env);
+  assert.equal(plain.code, 0, plain.stderr);
+  assert.equal(plain.json().model, 'anthropic/m');
+
   assert.equal(cli([...base, '--to-turn', '9'], box.env).code, 1);
   assert.match(cli(['run', 'missing', '--agent', 'pi', '--session', PI_SESSION], box.env).stderr, /no item "missing"/);
   assert.equal(cli(['run', 'summary', '--session', PI_SESSION], box.env).code, 64);
