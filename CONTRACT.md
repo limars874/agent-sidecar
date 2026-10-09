@@ -83,7 +83,7 @@ Write a title of at most 6 words for this session.
 {{transcript}}
 ```
 
-YAML / JSON: the same fields as a mapping.
+YAML / JSON: the same fields as a mapping. In YAML, write `output` as a block mapping (below) or quote the path (`output: { file: "out/{agent}.md" }`): unquoted `{…}` placeholders are YAML flow syntax and fail to parse.
 
 ```yaml
 everyTurns: 3

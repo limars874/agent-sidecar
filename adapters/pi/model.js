@@ -6,6 +6,8 @@ import { tail } from '../../core/runner.js';
 
 // Keep the child bare: no tools, no session file, and no extensions, so the
 // sidecar extension cannot trigger itself (AGENT_SIDECAR_CHILD guards it too).
+// Only flags that released Pi versions accept: an unknown flag fails the call
+// (--no-mcp is newer than the Pi this was tested against).
 export const PI_ARGS = [
   '-p',
   '--no-session',
@@ -14,7 +16,6 @@ export const PI_ARGS = [
   '--no-skills',
   '--no-prompt-templates',
   '--no-context-files',
-  '--no-mcp',
 ];
 
 export function callPiModel({ model, prompt, timeoutMs, env = process.env }) {

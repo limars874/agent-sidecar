@@ -35,7 +35,8 @@ Write a title of at most 6 words for this session. Reply with the title only.
 EOF
 cat > $AGENT_SIDECAR_HOME/items/summary.yaml <<'EOF'
 everyTurns: 1
-output: { file: out/{agent}/{session}/summary.md }
+output:
+  file: out/{agent}/{session}/summary.md
 prompt: Summarize the conversation below in 2 bullets.
 EOF
 

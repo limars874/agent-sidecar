@@ -18,7 +18,7 @@
 
 **D8 — Title output goes through a file plus Herdr.** A detached process cannot set the agent's terminal title, so `title` writes `title.txt`, which the Pi extension applies with `ctx.ui.setTitle`; Herdr pane titles are set directly from the CLI with `herdr pane report-metadata --source agent-sidecar`.
 
-**D9 — `pi -p` children are bare and guarded.** `--no-session --no-tools --no-extensions --no-skills --no-prompt-templates --no-context-files --no-mcp`, prompt on stdin, cwd = temp dir, and `AGENT_SIDECAR_CHILD=1` so even an explicitly loaded sidecar extension stays inactive. No recursion, no session files from side work, no project files pulled into the prompt.
+**D9 — `pi -p` children are bare and guarded.** `--no-session --no-tools --no-extensions --no-skills --no-prompt-templates --no-context-files` (not `--no-mcp`: the Pi tested live rejects it, and an unknown flag fails the call), prompt on stdin, cwd = temp dir, and `AGENT_SIDECAR_CHILD=1` so even an explicitly loaded sidecar extension stays inactive. No recursion, no session files from side work, no project files pulled into the prompt.
 
 **D10 — Items: strict validation, all three formats normalized to one shape.** Unknown keys are errors, a bad file is skipped and reported, others keep working. Markdown suits long prompts (body), YAML suits settings-heavy or script items, JSON suits generated items.
 
@@ -41,4 +41,5 @@
 - **Process cost.** Each finished turn starts one short Node process; each due item one `pi -p` process.
 - **No retries**, and a run whose worker is killed is noticed only by pid/age (30 min) on a later event.
 - **Script items are trusted code.** They run with the user's environment and permissions, like any file the user places in `items/`.
+- **Pi CLI flags.** The `pi -p` flags were taken from Pi's source on GitHub; a Pi older than those flags fails every model call with `Unknown option` (visible in `runs.jsonl`). MCP servers configured for Pi still start in the child.
 - **`AGENT_SIDECAR_NODE`.** Inside the Pi binary, `process.execPath` is Pi, not Node, so the extension starts the CLI with `node` from `PATH` (or `AGENT_SIDECAR_NODE`).
