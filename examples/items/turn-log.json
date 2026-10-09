@@ -1,0 +1,5 @@
+{
+  "everyTurns": 10,
+  "script": "node -e \"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const i=JSON.parse(s);console.log('reached turn '+i.toTurn+' in '+(i.cwd||'unknown cwd'))})\"",
+  "output": { "file": "out/{agent}/{session}/turns.md" }
+}

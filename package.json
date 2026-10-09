@@ -1,0 +1,19 @@
+{
+  "name": "agent-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Run configurable side work (titles, summaries, knowledge candidates) alongside AI coding agent sessions, on a cheaper model",
+  "type": "module",
+  "engines": {
+    "node": ">=20.12"
+  },
+  "bin": {
+    "agent-sidecar": "bin/agent-sidecar.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "yaml": "^2.6.0"
+  }
+}

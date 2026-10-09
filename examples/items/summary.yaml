@@ -1,0 +1,10 @@
+# Appends a short record of what happened since the last summary.
+everyTurns: 3
+output:
+  file: out/{agent}/{session}/summary.md
+prompt: |
+  Summarize the part of a coding session below (turns {{fromTurn}}+1 to {{toTurn}}) as 3–6 bullets:
+  what was done, which files changed, decisions taken, and what is still open.
+  Use only facts from the transcript. Reply with the bullets only.
+
+  {{transcript}}
