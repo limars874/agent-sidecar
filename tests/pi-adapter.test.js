@@ -82,7 +82,7 @@ test('extension: builds the shared event from Pi context', () => {
     pane: 'w1:p2',
     turn: 2,
   });
-  assert.equal(buildEvent(fakeCtx({ file: undefined }), {}), null);
+  assert.equal(buildEvent(fakeCtx({ file: null }), {}), null);
 });
 
 test('extension: registers nothing inside the sidecar own pi -p child', () => {
