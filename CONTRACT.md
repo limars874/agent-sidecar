@@ -213,7 +213,7 @@ The sidecar also creates one automatic metadata file at `out/{agent}/{sessionMon
 {"sessionId":"0199a3f2-…","agent":"pi","createdAt":"2026-10-10T13:35:00.000Z"}
 ```
 
-The file is created with exclusive creation and is never rewritten by later events. This canonical metadata location is independent of custom item output paths.
+The file is fully written and synced to a same-directory temporary file, then published with an exclusive hard-link step; it is never rewritten by later events. A pre-existing file is accepted only when its required fields match the current session; malformed or mismatched metadata is an explicit error. This canonical metadata location is independent of custom item output paths.
 
 ### 5.1 Execution semantics
 

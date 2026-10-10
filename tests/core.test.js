@@ -297,10 +297,14 @@ test('session metadata is created once in the canonical month directory', (t) =>
   const original = fs.readFileSync(file, 'utf8');
   assert.deepEqual(JSON.parse(original), { sessionId: 'a/b', agent: 'pi', createdAt: sessionContext.createdAt });
 
-  fs.writeFileSync(file, '{"keep":true}\n');
+  const existing = `${JSON.stringify({ ...JSON.parse(original), keep: true })}\n`;
+  fs.writeFileSync(file, existing);
   const second = ensureSessionMetadata({ root, event, sessionContext });
   assert.equal(second.written, file);
-  assert.equal(fs.readFileSync(file, 'utf8'), '{"keep":true}\n');
+  assert.equal(fs.readFileSync(file, 'utf8'), existing);
+
+  fs.writeFileSync(file, '{}\n');
+  assert.throws(() => ensureSessionMetadata({ root, event, sessionContext }), /does not match the current session/);
 });
 
 test('session metadata creation is safe when two workers race', async (t) => {
@@ -331,6 +335,7 @@ console.log(JSON.stringify(result));`;
     agent: 'pi',
     createdAt: '2026-10-10T13:35:00.000Z',
   });
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), ['metadata.json']);
 });
 
 test('outputs: replace mode atomically replaces a file while append remains a log', () => {

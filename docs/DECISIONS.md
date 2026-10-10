@@ -40,7 +40,7 @@
 
 **D19 — Scheduled execution is at-least-once.** Output is written before the successful completion checkpoint, so a crash in that small window can repeat a turn range. `replace` snapshots normally tolerate the repeat; `append` logs may duplicate records. Do not add transactions or general deduplication until real usage justifies their complexity.
 
-**D20 — Session output grouping uses the original UTC creation month.** `{sessionMonth}` comes from the agent session header, not sidecar processing time, and remains stable across retries and month boundaries. The canonical metadata file is created once with exclusive creation; legacy/custom paths remain compatible and are not auto-migrated.
+**D20 — Session output grouping uses the original UTC creation month.** `{sessionMonth}` comes from the agent session header, not sidecar processing time, and remains stable across retries and month boundaries. The canonical metadata file is fully prepared in a temporary file and published with exclusive creation; existing metadata is validated and never overwritten. Legacy/custom paths remain compatible and are not auto-migrated.
 
 ## Known limitations
 

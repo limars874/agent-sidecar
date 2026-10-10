@@ -1,5 +1,6 @@
 // Where an item's result goes (CONTRACT.md "Outputs"). New output types are
 // added here.
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -78,13 +79,46 @@ export function ensureSessionMetadata({ root, event, sessionContext }) {
     createdAt: sessionContext.createdAt,
   };
   fs.mkdirSync(dir, { recursive: true });
+  const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  let fd = null;
   try {
-    fs.writeFileSync(file, `${JSON.stringify(metadata)}\n`, { flag: 'wx' });
-    return { written: file, warning: null };
-  } catch (err) {
-    if (err.code === 'EEXIST') return { written: file, warning: null };
-    throw err;
+    fd = fs.openSync(temp, 'wx');
+    fs.writeFileSync(fd, `${JSON.stringify(metadata)}\n`, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    try {
+      fs.linkSync(temp, file);
+      return { written: file, warning: null };
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      readExistingMetadata(file, metadata);
+      return { written: file, warning: null };
+    }
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+    try {
+      fs.unlinkSync(temp);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
   }
+}
+
+function readExistingMetadata(file, expected) {
+  let actual;
+  try {
+    actual = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    throw new Error(`metadata file ${file} is invalid: ${err.message}`);
+  }
+  if (
+    !actual || actual.sessionId !== expected.sessionId ||
+    actual.agent !== expected.agent || actual.createdAt !== expected.createdAt
+  ) {
+    throw new Error(`metadata file ${file} does not match the current session`);
+  }
+  return true;
 }
 
 function writeFileOutput(output, text, ctx) {
