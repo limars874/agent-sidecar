@@ -35,9 +35,9 @@ Dependency direction: `bin → host → core + adapters + runners`; adapters rea
 1. Pi fires `session_start` when a session starts or changes. For `new` and `resume`, the extension reads the global lifecycle policy and, when enabled, clears the pane label and the sidecar-owned Herdr metadata title. A configured resume cleanup also suppresses the immediate restoration of that session's saved terminal title.
 2. Pi fires `agent_settled` (the run is fully done: no retry, compaction or queued message left). If it was not aborted, the extension builds the event from `ctx`: session id and file from `ctx.sessionManager`, model from `ctx.model`, pane from `$HERDR_PANE_ID`, turn = user messages on `getBranch()`.
 3. It spawns `node bin/agent-sidecar.js event --json <event>` detached with stdio ignored, and returns. Pi never waits.
-4. `event` validates the event, loads the items, takes the session lock, runs `planEvent` on `state.json`, saves the new state (cursors moved, `running` markers set), releases the lock.
+4. `event` validates the event, loads the items, takes the session lock, runs `planEvent` on `state.json`, saves the new state (`scheduledThrough` and `running` markers set), releases the lock.
 5. If something is due, it writes `jobs/<job>.json` and spawns `agent-sidecar work <job>` detached, with stdout/stderr going to `sidecar.log`. Then it exits.
-6. `work` records its pid in the `running` markers, reads the transcript once, and runs the job's items one after another: resolve the item/global runner (default `pi`) and effort, render the turn slice, fill the prompt, call that runner (or run the script), and apply the output. After each item it appends the selected runner and effort to `runs.jsonl` and, under the lock, clears `running` and stores `lastRun`. Finally it removes the job file.
+6. `work` records its pid in the `running` markers, reads the transcript once, and runs the job's items one after another: resolve the item/global runner (default `pi`) and effort, select the context scope/roles/files and budget, fill the prompt, call that runner (or run the script), and apply the output. File outputs can append activity records or atomically replace current-state snapshots. After each item it appends the selected runner and effort to `runs.jsonl` and, under the lock, clears `running`, stores `lastRun`, and advances `completedThrough` only after success. Finally it removes the job file.
 7. If an item wrote `title.txt`, the extension (which polls that file once a second) calls `ctx.ui.setTitle`. Herdr's pane title was already set in step 6.
 
 ## Why two detached hops
@@ -48,14 +48,14 @@ Dependency direction: `bin → host → core + adapters + runners`; adapters rea
 
 - No process keeps state in memory across events. Everything lives in `state/<agent>/<session>/` (CONTRACT §6).
 - Every read-modify-write of `state.json` happens under the session's lock file; writes go through a temp file and `rename`.
-- An item's cursor (`lastTurn`) moves when its run is scheduled. Two quick events therefore cannot schedule the same turns twice, and a slow run cannot block later scheduling for longer than its own `running` marker lasts.
+- `scheduledThrough` moves when a run is scheduled, while `completedThrough`/`lastTurn` move only after success. Two quick events therefore cannot schedule the same turns twice, and failed work remains retryable instead of silently losing its delta.
 - One item never runs twice at once in a session (the `running` marker). Different items, and different sessions, run in parallel.
 - Crashed workers are detected by a dead pid or a 30-minute age; the item is then scheduled again on the next due event.
 
 ## Adding an agent adapter
 
 1. Add `adapters/<agent>/index.js` exporting `{ name, readTranscript }` (CONTRACT §2), then register it in `adapters/index.js`.
-2. Add a reader for that agent's session format producing the neutral transcript (active branch, roles `user`/`assistant`/`tool`).
+2. Add a reader for that agent's session format producing the neutral transcript (active branch, roles `user`/`assistant`/`toolCall`/`toolResult`). Keep tool calls separate so context projections can filter them.
 3. Add the in-agent hook or extension that sends the event when a turn has finished. If the agent cannot set its own title from inside, `title` output still reaches Herdr panes through `pane`.
 4. Add tests: a fixture session file, reader tests, and an end-to-end `event --foreground` test like `tests/cli.test.js`.
 
@@ -66,4 +66,4 @@ Dependency direction: `bin → host → core + adapters + runners`; adapters rea
 3. Select it with the global `runner` config or an item's `runner` field. The observed agent adapter does not need to change.
 4. Add runner tests using a fake executable; the existing Pi runner test is in `tests/pi-adapter.test.js` for historical grouping.
 
-Adding either kind of integration leaves `core/` unchanged. Adding an agent also makes its name valid to `validateEvent`; adding a runner only changes runner selection.
+Adding either kind of integration leaves the other boundary unchanged. Adding an agent also makes its name valid to `validateEvent`; adding a runner only changes runner selection. Context projection and output mode remain shared core behavior.

@@ -88,7 +88,7 @@ function main(argv, env = process.env) {
         parse(args, {}, 0);
         const { items, errors } = listItems({ root });
         for (const i of items) {
-          print({ name: i.name, everyTurns: i.everyTurns, kind: i.kind, runner: i.runner, model: i.model, effort: i.effort, context: i.context, output: i.output, file: i.file });
+          print({ name: i.name, everyTurns: i.everyTurns, kind: i.kind, runner: i.runner, model: i.model, effort: i.effort, context: i.contextSpec, output: i.output, file: i.file });
         }
         for (const e of errors) process.stderr.write(`agent-sidecar: ${e.file}: ${e.message}\n`);
         return errors.length ? 1 : 0;

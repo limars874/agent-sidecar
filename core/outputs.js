@@ -15,7 +15,7 @@ export const HERDR_SOURCE = 'agent-sidecar';
 export function applyOutput(output, text, ctx) {
   if (output.type === 'none') return { written: null, warnings: [] };
   if (output.type === 'title') return writeTitle(text, ctx);
-  if (output.type === 'file') return appendToFile(output.path, text, ctx);
+  if (output.type === 'file') return writeFileOutput(output, text, ctx);
   throw new Error(`unknown output type ${output.type}`);
 }
 
@@ -55,13 +55,24 @@ export function expandPathTemplate(template, ctx) {
   return path.resolve(ctx.root, withHome);
 }
 
-function appendToFile(template, text, ctx) {
+function writeFileOutput(output, text, ctx) {
   const body = text.trim();
   if (body === '') return { written: null, warnings: [] }; // nothing to record this time
-  const file = expandPathTemplate(template, ctx);
-  const header = `## ${ctx.now.toISOString()} · ${ctx.item.name} · ${ctx.event.agent} ${ctx.event.session} · turns ${ctx.fromTurn + 1}–${ctx.toTurn}`;
-  appendLine(file, `${header}\n\n${body}\n`);
+  const file = expandPathTemplate(output.path, ctx);
+  if (output.mode === 'replace') {
+    writeFileAtomic(file, `${body}\n`);
+  } else {
+    const header = `## ${ctx.now.toISOString()} · ${ctx.item.name} · ${ctx.event.agent} ${ctx.event.session} · turns ${ctx.fromTurn + 1}–${ctx.toTurn}`;
+    appendLine(file, `${header}\n\n${body}\n`);
+  }
   return { written: file, warnings: [] };
+}
+
+function writeFileAtomic(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, text);
+  fs.renameSync(temp, file);
 }
 
 function localDate(d) {

@@ -41,7 +41,7 @@ export function readPiSession(file) {
     session: header.id,
     cwd: header.cwd ?? null,
     model: lastModel(branch),
-    messages: branch.filter((e) => e.type === 'message').map((e) => toMessage(e.message)).filter(Boolean),
+    messages: branch.filter((e) => e.type === 'message').flatMap((e) => toMessages(e.message)),
   };
 }
 
@@ -56,24 +56,26 @@ function lastModel(branch) {
   return model;
 }
 
-function toMessage(m) {
-  if (!m) return null;
+function toMessages(m) {
+  if (!m) return [];
   if (m.role === 'user') {
     const text = contentText(m.content);
-    return text ? { role: 'user', text } : { role: 'user', text: '[empty message]' };
+    return [text ? { role: 'user', text } : { role: 'user', text: '[empty message]' }];
   }
   if (m.role === 'assistant') {
-    const parts = [];
+    const messages = [];
     for (const c of m.content ?? []) {
-      if (c.type === 'text' && c.text?.trim()) parts.push(c.text.trim());
-      if (c.type === 'toolCall') parts.push(`→ ${c.name} ${clip(JSON.stringify(c.arguments ?? {}), TOOL_ARGS_MAX)}`);
+      if (c.type === 'text' && c.text?.trim()) messages.push({ role: 'assistant', text: c.text.trim() });
+      if (c.type === 'toolCall') {
+        messages.push({ role: 'toolCall', name: c.name, text: clip(JSON.stringify(c.arguments ?? {}), TOOL_ARGS_MAX) });
+      }
     }
-    return parts.length ? { role: 'assistant', text: parts.join('\n') } : null;
+    return messages;
   }
   if (m.role === 'toolResult') {
-    return { role: 'tool', name: m.toolName, text: contentText(m.content) };
+    return [{ role: 'toolResult', name: m.toolName, text: contentText(m.content) }];
   }
-  return null; // other roles (e.g. Pi's own bash/custom messages) are not part of v1
+  return []; // other roles (e.g. Pi's own bash/custom messages) are not part of v1
 }
 
 function contentText(content) {

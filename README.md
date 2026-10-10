@@ -59,8 +59,12 @@ One file per item in `~/.agent-sidecar/items/`. Full reference: [CONTRACT.md §3
 ```markdown
 ---
 everyTurns: 2          # run every 2 turns
-context: session       # the whole conversation (default: delta = turns since the last run)
-output: title          # terminal / Herdr pane title
+context:
+  scope: recent         # latest user turns; legacy `session` and `delta` strings remain valid
+  turns: 4
+  include: [user, assistant]
+  maxChars: 12000
+output: title            # terminal / Herdr pane title
 ---
 Write a title of at most 6 words for the coding session below. Reply with the title only.
 
@@ -73,10 +77,18 @@ everyTurns: 3
 runner: pi                            # optional; else config runner, else pi
 effort: high                          # optional; runner maps this to its own flag
 model: anthropic/claude-haiku-4-5     # optional; else config model, else the session's model
+context:
+  scope: delta
+  include: [user, assistant, toolCall]
+  files:
+    - "out/{agent}/{session}/summary.md"
+  maxChars: 30000
 output:
   file: out/{agent}/{session}/summary.md
+  mode: replace                       # current snapshot; use append for an activity log
 prompt: |
-  Summarize what was done in turns {{fromTurn}}+1 to {{toTurn}} as bullets.
+  Maintain the complete current session summary using the existing snapshot and this delta.
+  Return the replacement snapshot only.
   {{transcript}}
 ```
 
@@ -94,9 +106,11 @@ prompt: |
   {{transcript}}
 ```
 
-Shipped examples (`examples/items/`): `title.md` (pane title), `summary.yaml` (work log), `knowledge.md` (knowledge candidates with evidence and confidence; writes nothing when there are none), `turn-log.json` (a script item).
+Shipped examples (`examples/items/`): `title.md` (pane title), `summary.yaml` (current-state snapshot), `knowledge.md` (knowledge candidates with evidence and confidence; writes nothing when there are none), `turn-log.json` (an append-only script item).
 
 Runner choice per item: item `runner` → config `runner` → `pi` (the default runner). The runner is independent from the agent adapter: the Pi adapter reads the session transcript, while the selected runner performs the side work.
+
+Context can be a legacy `delta`/`session` string or a mapping with `scope`, `turns`, `include`, `maxChars` and optional `files`. Messages are filtered by role before rendering, and complete blocks are kept within the per-item budget where possible. Use `output.mode: replace` for a current-state snapshot such as `summary.md`; the default file mode remains `append` for activity logs and knowledge candidates.
 
 Effort choice per item: item `effort` → config `effort` → the runner's default. For Pi, `effort` is passed as `--thinking`; the old `model: provider/id:level` form remains supported when no explicit effort is set. Jcode uses its own `~/.jcode/config.toml` effort setting.
 

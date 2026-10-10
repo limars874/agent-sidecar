@@ -25,7 +25,7 @@ One developer running agent sessions (initially Pi) in terminals or Herdr panes,
 | R1 | Follow the current agent process and observe its conversation. | Pi extension reports each finished turn; the CLI reads the session file. |
 | R2 | Use a cheaper model for side work. | Per-item and global `model`; calls go through the selected runner (v1 default: `pi -p`). |
 | R3 | Update the terminal / Herdr pane title from conversation changes. | `output: title` → `title.txt` (applied by the extension) + `herdr pane report-metadata`. |
-| R4 | Summarize and record what has been done. | Item with `output: { file }` (example `summary.yaml`). |
+| R4 | Maintain a compact current-state summary of what has been done. | Item with `context.files` + `output.mode: replace` (example `summary.yaml`). |
 | R5 | Extract possible knowledge points into a chosen directory. | Item with `output: { file }` (example `knowledge.md`), path template chooses the directory. |
 | R6 | Extensible: items as Markdown, YAML or JSON files in one directory; several items, each doing its own configured work. | `~/.agent-sidecar/items/`, CONTRACT.md §3. |
 | R7 | Each item triggers a prompt or a script every N turns. | `everyTurns`, `prompt` / `script`. |
@@ -37,6 +37,9 @@ One developer running agent sessions (initially Pi) in terminals or Herdr panes,
 | R13 | One shared storage tree, namespaced by agent and session. | `~/.agent-sidecar/`. |
 | R14 | Optionally control reasoning effort independently from the model name. | Per-item and global `effort`; each runner maps it to its own CLI parameter when supported. |
 | R15 | Use Jcode as an alternative one-shot runner while observing a Pi session. | `runner: jcode` invokes `jcode run --json`; Pi remains the transcript adapter. |
+| R16 | Let each item choose the transcript scope, roles, files and context budget. | Legacy `delta`/`session` plus `context.scope`, `turns`, `include`, `files` and `maxChars`. |
+| R17 | Distinguish scheduled work from successfully completed work. | `scheduledThrough` prevents duplicate scheduling; `completedThrough` advances only after success. |
+| R18 | Support both activity logs and current-state files. | File output defaults to `append`; `mode: replace` atomically replaces a snapshot. |
 
 ## Non-goals (v1)
 
@@ -44,11 +47,11 @@ One developer running agent sessions (initially Pi) in terminals or Herdr panes,
 - Writing directly into a knowledge base: knowledge output is candidates in files, reviewed by a person.
 - Running items at session end, on compaction, or on a timer; only every N turns.
 - A per-project items directory; there is one global directory.
-- Retries of failed runs; a daemon; a UI beyond titles.
+- Retry backoff, attempt limits, a daemon, or a UI beyond titles.
 
 ## Success criteria
 
-- With the example items installed, a Pi session in Herdr gets a pane title after 2 turns, `summary.md` grows every 3 turns, and `knowledge.md` gets candidates (or nothing) every 5 turns.
+- With the example items installed, a Pi session in Herdr gets a pane title after 2 turns, `summary.md` is replaced with the current snapshot every 3 turns, and `knowledge.md` gets candidates (or nothing) every 5 turns.
 - The main Pi session never waits for side work: the extension only starts a process.
 - An invalid item file never stops other items, and its error is visible in `agent-sidecar items` and `sidecar.log`.
 - All behaviour above is covered by `npm test` without network access.

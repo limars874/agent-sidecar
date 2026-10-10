@@ -27,7 +27,7 @@ test('yaml and json items normalize to the same shape', () => {
   assert.equal(y.runner, 'pi');
   assert.equal(y.effort, 'high');
   assert.equal(y.context, 'delta');
-  assert.deepEqual(y.output, { type: 'file', path: 'out/{session}.md' });
+  assert.deepEqual(y.output, { type: 'file', path: 'out/{session}.md', mode: 'append' });
 });
 
 test('script items and default output', () => {
@@ -49,11 +49,27 @@ test('invalid items are rejected with a reason', () => {
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\nrunner: ""', /runner/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\neffort: ""', /effort/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\ncontext: all', /context/],
+    ['/x/a.yaml', 'everyTurns: 1\nprompt: a\ncontext:\n  scope: recent', /context.turns/],
+    ['/x/a.yaml', 'everyTurns: 1\nprompt: a\ncontext:\n  scope: delta\n  turns: 2', /context.turns/],
+    ['/x/a.yaml', 'everyTurns: 1\nprompt: a\ncontext:\n  include: [user, nope]', /context.include/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\noutput: stdout', /output must be/],
+    ['/x/a.yaml', 'everyTurns: 1\nprompt: a\noutput:\n  file: summary.md\n  mode: overwrite', /output.mode/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\nname: "bad name"', /invalid name/],
     ['/x/a.json', '[1]', /mapping/],
   ];
   for (const [file, text, re] of cases) assert.throws(() => parseItemFile(file, text), re, text);
+});
+
+test('context mapping normalizes scope, include, budget and files', () => {
+  const item = parseItemFile('/x/summary.yaml', 'everyTurns: 3\ncontext:\n  scope: delta\n  include: [user, assistant, toolCall]\n  maxChars: 12000\n  files:\n    - "out/{agent}/{session}/summary.md"\nprompt: update');
+  assert.equal(item.context, 'delta');
+  assert.deepEqual(item.contextSpec, {
+    scope: 'delta',
+    turns: null,
+    include: ['user', 'assistant', 'toolCall'],
+    maxChars: 12000,
+    files: ['out/{agent}/{session}/summary.md'],
+  });
 });
 
 test('loadItems skips bad files and duplicates, keeps the rest', (t) => {

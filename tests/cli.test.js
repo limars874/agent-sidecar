@@ -37,6 +37,8 @@ test('event --foreground: due items run, outputs written, cursors saved', (t) =>
   assert.equal(state.items.title.lastTurn, 2);
   assert.equal(state.items.summary.running, undefined);
   assert.equal(state.items.summary.lastRun.status, 'ok');
+  assert.equal(state.items.summary.completedThrough, 2);
+  assert.equal(state.items.summary.scheduledThrough, 2);
   assert.equal(fs.readdirSync(path.join(box.stateDir(), 'jobs')).length, 0, 'job file removed');
   assert.deepEqual(readJsonLines(path.join(box.stateDir(), 'runs.jsonl')).map((x) => x.status), ['ok', 'ok']);
   assert.deepEqual(readJsonLines(path.join(box.stateDir(), 'runs.jsonl')).map((x) => x.runner), ['pi', 'pi']);
@@ -44,6 +46,18 @@ test('event --foreground: due items run, outputs written, cursors saved', (t) =>
   // Reporting the same turn again schedules nothing.
   const again = cli(['event', '--foreground', '--json', JSON.stringify(event())], env).json();
   assert.deepEqual(again.scheduled, []);
+});
+
+test('summary snapshot replaces the previous file and feeds it into the next delta', (t) => {
+  const box = sandbox(t);
+  box.item('summary.yaml', 'everyTurns: 1\ncontext:\n  scope: delta\n  include: [user, assistant]\n  files:\n    - "out/{agent}/{session}/summary.md"\noutput:\n  file: out/{agent}/{session}/summary.md\n  mode: replace\nprompt: Summarize');
+  const first = cli(['event', '--foreground', '--json', JSON.stringify(event({ turn: 1 }))], { ...box.env, FAKE_PI_REPLY: 'snapshot one' });
+  assert.equal(first.code, 0, first.stderr);
+  const second = cli(['event', '--foreground', '--json', JSON.stringify(event({ turn: 2 }))], { ...box.env, FAKE_PI_REPLY: 'snapshot two' });
+  assert.equal(second.code, 0, second.stderr);
+  const file = path.join(box.root, 'out', 'pi', PI_SESSION_ID, 'summary.md');
+  assert.equal(fs.readFileSync(file, 'utf8'), 'snapshot two\n');
+  assert.match(box.piCalls()[1].prompt, /\[file out\/\{agent\}\/\{session\}\/summary\.md\]\nsnapshot one/);
 });
 
 test('event: session model is the fallback; failures are recorded, not fatal', (t) => {
@@ -56,7 +70,18 @@ test('event: session model is the fallback; failures are recorded, not fatal', (
   const [run] = readJsonLines(path.join(box.stateDir(), 'runs.jsonl'));
   assert.equal(run.status, 'error');
   assert.match(run.error, /pi -p exited 2/);
+  const failedState = JSON.parse(fs.readFileSync(path.join(box.stateDir(), 'state.json'), 'utf8'));
+  assert.equal(failedState.items.note.lastTurn, 0);
+  assert.equal(failedState.items.note.completedThrough, 0);
+  assert.equal(failedState.items.note.scheduledThrough, 2);
   assert.match(fs.readFileSync(path.join(box.stateDir(), 'sidecar.log'), 'utf8'), /note: pi -p exited 2/);
+
+  const retry = cli(['event', '--foreground', '--json', JSON.stringify(event({ turn: 2 }))], box.env);
+  assert.equal(retry.code, 0, retry.stderr);
+  assert.equal(readJsonLines(path.join(box.stateDir(), 'runs.jsonl')).at(-1).status, 'ok');
+  const retriedState = JSON.parse(fs.readFileSync(path.join(box.stateDir(), 'state.json'), 'utf8'));
+  assert.equal(retriedState.items.note.lastTurn, 2);
+  assert.equal(retriedState.items.note.completedThrough, 2);
 });
 
 test('event: global effort reaches the default Pi runner', (t) => {
