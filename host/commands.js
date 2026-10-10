@@ -11,6 +11,7 @@ import { loadItems } from '../core/items.js';
 import { BIN_PATH, itemsDir, sessionDir } from '../core/paths.js';
 import { runItem } from '../core/runner.js';
 import { planEvent } from '../core/scheduler.js';
+import { getRunner, resolveRunnerName } from '../runners/index.js';
 import { appendLine, readState, runIsStale, updateState, writeJsonAtomic } from '../core/state.js';
 import { countTurns } from '../core/transcript.js';
 
@@ -85,9 +86,11 @@ export function work(jobFile, { root, env }) {
       if (setupError) throw new Error(setupError);
       const item = items.find((i) => i.name === d.name);
       if (!item) throw new Error('item no longer exists or failed to load');
+      const runnerName = resolveRunnerName(item, config);
+      const runner = getRunner(runnerName);
       const r = runItem({
         item,
-        adapter: getAdapter(event.agent),
+        runner,
         transcript,
         event,
         config,
@@ -98,7 +101,7 @@ export function work(jobFile, { root, env }) {
         env,
         now: new Date(),
       });
-      Object.assign(record, { status: 'ok', model: r.model, written: r.output.written, warnings: r.output.warnings });
+      Object.assign(record, { status: 'ok', runner: runnerName, model: r.model, effort: r.effort, written: r.output.written, warnings: r.output.warnings });
       for (const w of r.output.warnings) log(dir, `${d.name}: ${w}`);
     } catch (err) {
       Object.assign(record, { status: 'error', error: err.message });
@@ -142,10 +145,12 @@ export function runManual({ name, agent, sessionFile, model, pane, fromTurn, toT
   const from = fromTurn ?? (item.context === 'session' ? 0 : Math.min(cursor, to));
   if (from < 0 || to < from || to > turns) throw new Error(`invalid turn range ${from}..${to} (session has ${turns} turns)`);
 
+  const runnerName = resolveRunnerName(item, config);
+  const runner = getRunner(runnerName);
   const r = runItem({
-    item, adapter, transcript, event, config, root, sessionDir: dir, fromTurn: from, toTurn: to, env, now: new Date(), dryRun,
+    item, runner, transcript, event, config, root, sessionDir: dir, fromTurn: from, toTurn: to, env, now: new Date(), dryRun,
   });
-  return { item: name, model: r.model, fromTurn: from, toTurn: to, ...(dryRun ? { prompt: r.prompt } : { text: r.text, output: r.output }) };
+  return { item: name, runner: runnerName, model: r.model, effort: r.effort, fromTurn: from, toTurn: to, ...(dryRun ? { prompt: r.prompt } : { text: r.text, output: r.output }) };
 }
 
 export function listItems({ root }) {

@@ -3,7 +3,7 @@
 Runs configurable side work alongside AI coding agent sessions: every few turns it can retitle the terminal or Herdr pane, append a summary of what was done, or collect knowledge candidates, usually on a cheaper model than the session's. What runs is defined by **items**: Markdown, YAML or JSON files in one directory.
 
 ```
-Pi (extension) ──event──► agent-sidecar event ──detached──► agent-sidecar work ──► pi -p (cheap model) / script
+Pi (extension) ──event──► agent-sidecar event ──detached──► agent-sidecar work ──► selected runner (default: pi -p) / script
                                  │                                │
                      ~/.agent-sidecar/state/pi/<session>/   outputs: title.txt + Herdr pane title, files under out/
 ```
@@ -62,6 +62,8 @@ Write a title of at most 6 words for the coding session below. Reply with the ti
 ```yaml
 # summary.yaml
 everyTurns: 3
+runner: pi                            # optional; else config runner, else pi
+effort: high                          # optional; runner maps this to its own flag
 model: anthropic/claude-haiku-4-5     # optional; else config model, else the session's model
 output:
   file: out/{agent}/{session}/summary.md
@@ -74,7 +76,21 @@ prompt: |
 { "everyTurns": 10, "script": "./my-script.sh", "output": { "file": "out/{agent}/{session}/turns.md" } }
 ```
 
+To run a prompt item through Jcode while the observed session remains Pi:
+
+```yaml
+runner: jcode
+model: openai-codex/gpt-5.6-luna
+prompt: |
+  Summarize the transcript below.
+  {{transcript}}
+```
+
 Shipped examples (`examples/items/`): `title.md` (pane title), `summary.yaml` (work log), `knowledge.md` (knowledge candidates with evidence and confidence; writes nothing when there are none), `turn-log.json` (a script item).
+
+Runner choice per item: item `runner` → config `runner` → `pi` (the default runner). The runner is independent from the agent adapter: the Pi adapter reads the session transcript, while the selected runner performs the side work.
+
+Effort choice per item: item `effort` → config `effort` → the runner's default. For Pi, `effort` is passed as `--thinking`; the old `model: provider/id:level` form remains supported when no explicit effort is set. Jcode uses its own `~/.jcode/config.toml` effort setting.
 
 Model choice per item: item `model` → config `model` → the session's current model.
 

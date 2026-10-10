@@ -28,9 +28,16 @@
 
 **D13 — Plain ESM JavaScript, one dependency (`yaml`).** Matches the user's other tools (tug), runs without a build step, and Pi loads `.js` extensions directly. Node has no YAML parser, so `yaml` is the only dependency.
 
+**D14 — Adapters and runners are separate.** An adapter reads the observed agent's session and reports its events; a runner performs one-shot model work. This lets a Pi session use a future Claude or Codex runner without replacing its Pi transcript adapter. The default runner remains `pi` for backward compatibility.
+
+**D15 — Use `effort` as the normalized reasoning control.** `effort` is an opaque cross-runner value; each runner maps it to its own CLI terminology (`--thinking` for Pi). It is separate from `model`, while Pi's `model: provider/id:level` syntax remains a compatibility fallback when no explicit effort is configured.
+
+**D16 — Jcode uses its own effort configuration for v1.** `jcode run` exposes no per-call effort flag in the installed `v0.93.0` CLI, so the Jcode runner does not synthesize or mutate Jcode configuration. It uses the existing `~/.jcode/config.toml` provider/model settings and only adapts the invocation shape and model name.
+
 ## Known limitations
 
-- **Only Pi.** No other adapter exists yet (by design for v1).
+- **Only Pi adapter.** No Claude Code, Codex or other agent adapter exists yet. Runners currently include `pi` and `jcode`.
+- **Jcode effort is configuration-scoped.** The installed Jcode CLI has no per-call effort flag, so sidecar `effort` does not override `~/.jcode/config.toml` for Jcode runs.
 - **No run at session end.** Up to `everyTurns − 1` final turns of a session are never processed automatically. Use `agent-sidecar run` to catch up.
 - **Active branch = last entry in the file.** Same rule as Pi's own loader. If a user moves around the tree with `/tree` without adding a message, the CLI still reads the branch of the last written entry.
 - **Transcript coverage.** Only user, assistant (text and tool calls) and tool result messages are read. Pi's other message kinds (user `!bash` executions, extension messages, compaction and branch summaries) are not part of the transcript.
@@ -38,8 +45,8 @@
 - **Title only for Pi's own terminal and Herdr.** Outside Herdr, a future hook-only adapter cannot set the terminal title.
 - **Prompts leave the machine.** `{{transcript}}` is sent to whichever provider the chosen model belongs to.
 - **Cost control is by configuration only**: `everyTurns`, model choice and `maxTranscriptChars`. There is no budget limit.
-- **Process cost.** Each finished turn starts one short Node process; each due item one `pi -p` process.
+- **Process cost.** Each finished turn starts one short Node process; each due prompt item one selected runner process (the v1 default is `pi -p`).
 - **No retries**, and a run whose worker is killed is noticed only by pid/age (30 min) on a later event.
 - **Script items are trusted code.** They run with the user's environment and permissions, like any file the user places in `items/`.
-- **Pi CLI flags.** The `pi -p` flags were taken from Pi's source on GitHub; a Pi older than those flags fails every model call with `Unknown option` (visible in `runs.jsonl`). MCP servers configured for Pi still start in the child.
+- **Pi runner CLI flags.** The `pi -p` flags were taken from Pi's source on GitHub; a Pi older than those flags fails every model call with `Unknown option` (visible in `runs.jsonl`). MCP servers configured for Pi still start in the child.
 - **`AGENT_SIDECAR_NODE`.** Inside the Pi binary, `process.execPath` is Pi, not Node, so the extension starts the CLI with `node` from `PATH` (or `AGENT_SIDECAR_NODE`).

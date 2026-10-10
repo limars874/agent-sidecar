@@ -10,6 +10,8 @@ export const DEFAULT_LIFECYCLE = Object.freeze({
 });
 
 export const DEFAULTS = Object.freeze({
+  runner: 'pi',
+  effort: null,
   model: null,
   timeoutMs: 120000,
   maxTranscriptChars: 60000,
@@ -18,6 +20,8 @@ export const DEFAULTS = Object.freeze({
 });
 
 const CHECKS = {
+  runner: (v) => typeof v === 'string' && v.trim() !== '',
+  effort: (v) => typeof v === 'string' && v.trim() !== '',
   model: (v) => typeof v === 'string' && v.trim() !== '',
   timeoutMs: (v) => Number.isInteger(v) && v > 0,
   maxTranscriptChars: (v) => Number.isInteger(v) && v > 0,

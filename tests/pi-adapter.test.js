@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { buildEvent, createExtension } from '../adapters/pi/extension.js';
-import { callPiModel, PI_ARGS } from '../adapters/pi/model.js';
+import { callPiModel, PI_ARGS, preparePiModel } from '../runners/pi.js';
 import { readPiSession } from '../adapters/pi/transcript.js';
 import { countTurns } from '../core/transcript.js';
 import { PI_SESSION, PI_SESSION_ID, readJsonLines, sandbox, waitFor } from './helpers.js';
@@ -24,6 +24,15 @@ test('Pi session: active branch only, roles mapped, partial last line ignored', 
     { role: 'assistant', text: 'Renamed a.txt to c.txt.' },
   ]);
   assert.equal(countTurns(t.messages), 2);
+});
+
+test('Pi runner: explicit effort uses --thinking and overrides a model suffix', (t) => {
+  const box = sandbox(t);
+  assert.deepEqual(preparePiModel({ model: 'anthropic/cheap:low', effort: 'xhigh' }), { model: 'anthropic/cheap', effort: 'xhigh' });
+  assert.deepEqual(preparePiModel({ model: 'anthropic/cheap:xhigh', effort: null }), { model: 'anthropic/cheap:xhigh', effort: null });
+  callPiModel({ model: 'anthropic/cheap:low', effort: 'xhigh', prompt: 'hello', timeoutMs: 10000, env: { ...box.env, FAKE_PI_REPLY: 'Answer' } });
+  const [call] = box.piCalls();
+  assert.deepEqual(call.args, [...PI_ARGS, '--model', 'anthropic/cheap', '--thinking', 'xhigh']);
 });
 
 test('Pi session: a file without a header is rejected', (t) => {

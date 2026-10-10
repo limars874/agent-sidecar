@@ -19,8 +19,10 @@ export function sandbox(t) {
     ...process.env,
     AGENT_SIDECAR_HOME: root,
     AGENT_SIDECAR_PI_BIN: path.join(FIXTURES, 'fake-pi.js'),
+    AGENT_SIDECAR_JCODE_BIN: path.join(FIXTURES, 'fake-jcode.js'),
     HERDR_BIN_PATH: path.join(FIXTURES, 'fake-herdr.js'),
     FAKE_PI_LOG: path.join(dir, 'pi.log'),
+    FAKE_JCODE_LOG: path.join(dir, 'jcode.log'),
     FAKE_HERDR_LOG: path.join(dir, 'herdr.log'),
   };
   delete env.AGENT_SIDECAR_CHILD;
@@ -36,6 +38,7 @@ export function sandbox(t) {
       fs.writeFileSync(path.join(root, 'config.yaml'), text);
     },
     piCalls: () => readJsonLines(env.FAKE_PI_LOG),
+    jcodeCalls: () => readJsonLines(env.FAKE_JCODE_LOG),
     herdrCalls: () => readJsonLines(env.FAKE_HERDR_LOG),
     stateDir: (session = PI_SESSION_ID) => path.join(root, 'state', 'pi', session),
   };

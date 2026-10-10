@@ -39,6 +39,7 @@ test('event --foreground: due items run, outputs written, cursors saved', (t) =>
   assert.equal(state.items.summary.lastRun.status, 'ok');
   assert.equal(fs.readdirSync(path.join(box.stateDir(), 'jobs')).length, 0, 'job file removed');
   assert.deepEqual(readJsonLines(path.join(box.stateDir(), 'runs.jsonl')).map((x) => x.status), ['ok', 'ok']);
+  assert.deepEqual(readJsonLines(path.join(box.stateDir(), 'runs.jsonl')).map((x) => x.runner), ['pi', 'pi']);
 
   // Reporting the same turn again schedules nothing.
   const again = cli(['event', '--foreground', '--json', JSON.stringify(event())], env).json();
@@ -56,6 +57,34 @@ test('event: session model is the fallback; failures are recorded, not fatal', (
   assert.equal(run.status, 'error');
   assert.match(run.error, /pi -p exited 2/);
   assert.match(fs.readFileSync(path.join(box.stateDir(), 'sidecar.log'), 'utf8'), /note: pi -p exited 2/);
+});
+
+test('event: global effort reaches the default Pi runner', (t) => {
+  const box = sandbox(t);
+  box.item('note.md', '---\neveryTurns: 1\n---\nNote it.');
+  box.config('model: global/model\neffort: high\n');
+  cli(['event', '--foreground', '--json', JSON.stringify(event())], box.env);
+  const call = box.piCalls()[0];
+  assert.deepEqual(call.args.slice(-4), ['--model', 'global/model', '--thinking', 'high']);
+  assert.equal(readJsonLines(path.join(box.stateDir(), 'runs.jsonl'))[0].effort, 'high');
+});
+
+test('event: jcode runner maps the model and parses JSON text', (t) => {
+  const box = sandbox(t);
+  box.item('note.yaml', 'everyTurns: 1\nrunner: jcode\nmodel: openai-codex/gpt-5.6-luna:xhigh\neffort: xhigh\noutput:\n  file: out/jcode.md\nprompt: Summarize');
+  const r = cli(['event', '--foreground', '--json', JSON.stringify(event())], { ...box.env, FAKE_JCODE_REPLY: 'jcode answer' });
+  assert.equal(r.code, 0, r.stderr);
+  const [call] = box.jcodeCalls();
+  const modelIndex = call.args.indexOf('--model');
+  assert.equal(call.args[modelIndex - 2], '--provider');
+  assert.equal(call.args[modelIndex - 1], 'openai');
+  assert.equal(call.args[modelIndex + 1], 'gpt-5.6-luna');
+  assert.match(call.prompt, /Summarize/);
+  assert.match(call.prompt, /List the files/);
+  const [run] = readJsonLines(path.join(box.stateDir(), 'runs.jsonl'));
+  assert.equal(run.runner, 'jcode');
+  assert.equal(run.effort, 'xhigh');
+  assert.match(fs.readFileSync(path.join(box.root, 'out', 'jcode.md'), 'utf8'), /jcode answer/);
 });
 
 test('event: no model anywhere is an item error', (t) => {
@@ -93,12 +122,12 @@ test('script items get the context on stdin and their stdout goes to the output'
   const box = sandbox(t);
   fs.writeFileSync(
     path.join(box.root, 'items', 'count.js'),
-    "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const i=JSON.parse(s);console.log(`${i.item} ${i.agent} ${i.fromTurn}-${i.toTurn} ${i.model} ${i.transcript.includes('c.txt')}`)})",
+    "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const i=JSON.parse(s);console.log(`${i.item} ${i.agent} ${i.fromTurn}-${i.toTurn} ${i.runner} ${i.model} ${i.transcript.includes('c.txt')}`)})",
   );
   box.item('count.json', JSON.stringify({ everyTurns: 1, script: 'node count.js', output: { file: 'out/count.md' } }));
   box.item('fail.yaml', 'everyTurns: 1\nscript: "echo boom >&2; exit 4"\n');
   cli(['event', '--foreground', '--json', JSON.stringify(event())], box.env);
-  assert.match(fs.readFileSync(path.join(box.root, 'out', 'count.md'), 'utf8'), /\n\ncount pi 0-2 anthropic\/session-model true\n/);
+  assert.match(fs.readFileSync(path.join(box.root, 'out', 'count.md'), 'utf8'), /\n\ncount pi 0-2 pi anthropic\/session-model true\n/);
   const runs = readJsonLines(path.join(box.stateDir(), 'runs.jsonl'));
   assert.match(runs.find((x) => x.item === 'fail').error, /script exited 4: boom/);
   assert.equal(box.piCalls().length, 0);
@@ -121,6 +150,7 @@ test('run: manual run and dry run over a session file, cursor untouched', (t) =>
 
   const real = cli(base, { ...box.env, FAKE_PI_REPLY: 'manual summary' });
   assert.equal(real.code, 0, real.stderr);
+  assert.equal(real.json().runner, 'pi');
   assert.equal(real.json().text, 'manual summary');
   assert.match(fs.readFileSync(path.join(box.root, 'out', 'pi', PI_SESSION_ID, 'summary.md'), 'utf8'), /manual summary/);
   assert.equal(fs.existsSync(path.join(box.stateDir(), 'state.json')), false, 'run does not schedule or move cursors');

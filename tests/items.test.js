@@ -14,14 +14,18 @@ test('markdown item: frontmatter settings, body is the prompt', () => {
   assert.equal(item.prompt, 'Name it.\n\n{{transcript}}');
   assert.equal(item.context, 'session');
   assert.deepEqual(item.output, { type: 'title' });
+  assert.equal(item.runner, null);
   assert.equal(item.model, null);
+  assert.equal(item.effort, null);
   assert.equal(item.dir, '/x');
 });
 
 test('yaml and json items normalize to the same shape', () => {
-  const y = parseItemFile('/x/s.yaml', 'name: sum\neveryTurns: 3\nmodel: a/b\nprompt: hi\noutput:\n  file: out/{session}.md\n');
-  const j = parseItemFile('/x/s.json', JSON.stringify({ name: 'sum', everyTurns: 3, model: 'a/b', prompt: 'hi', output: { file: 'out/{session}.md' } }));
+  const y = parseItemFile('/x/s.yaml', 'name: sum\neveryTurns: 3\nrunner: pi\nmodel: a/b\neffort: high\nprompt: hi\noutput:\n  file: out/{session}.md\n');
+  const j = parseItemFile('/x/s.json', JSON.stringify({ name: 'sum', everyTurns: 3, runner: 'pi', model: 'a/b', effort: 'high', prompt: 'hi', output: { file: 'out/{session}.md' } }));
   assert.deepEqual({ ...y, file: null }, { ...j, file: null });
+  assert.equal(y.runner, 'pi');
+  assert.equal(y.effort, 'high');
   assert.equal(y.context, 'delta');
   assert.deepEqual(y.output, { type: 'file', path: 'out/{session}.md' });
 });
@@ -42,6 +46,8 @@ test('invalid items are rejected with a reason', () => {
     ['/x/a.yaml', 'everyTurns: 1', /exactly one of prompt or script/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\nscript: b', /exactly one of prompt or script/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\nevery: 2', /unknown key "every"/],
+    ['/x/a.yaml', 'everyTurns: 1\nprompt: a\nrunner: ""', /runner/],
+    ['/x/a.yaml', 'everyTurns: 1\nprompt: a\neffort: ""', /effort/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\ncontext: all', /context/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\noutput: stdout', /output must be/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\nname: "bad name"', /invalid name/],
@@ -67,13 +73,17 @@ test('loadItems skips bad files and duplicates, keeps the rest', (t) => {
 test('config: defaults, overrides, and errors', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'config-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  assert.equal(loadConfig(dir).runner, 'pi');
+  assert.equal(loadConfig(dir).effort, null);
   assert.equal(loadConfig(dir).model, null);
   assert.deepEqual(loadConfig(dir).lifecycle, { clearTitleOnNew: true, clearTitleOnResume: true });
   fs.writeFileSync(
     path.join(dir, 'config.yaml'),
-    'model: a/cheap\ntoolResultLines: 3\nlifecycle:\n  clearTitleOnNew: false\n  clearTitleOnResume: true\n',
+    'runner: pi\neffort: high\nmodel: a/cheap\ntoolResultLines: 3\nlifecycle:\n  clearTitleOnNew: false\n  clearTitleOnResume: true\n',
   );
   const c = loadConfig(dir);
+  assert.equal(c.runner, 'pi');
+  assert.equal(c.effort, 'high');
   assert.equal(c.model, 'a/cheap');
   assert.equal(c.toolResultLines, 3);
   assert.equal(c.timeoutMs, 120000);
@@ -82,6 +92,8 @@ test('config: defaults, overrides, and errors', (t) => {
   assert.throws(() => loadConfig(dir), /unknown key "lifecycle.clearTitleOnStart"/);
   fs.writeFileSync(path.join(dir, 'config.yaml'), 'lifecycle:\n  clearTitleOnNew: yes\n');
   assert.throws(() => loadConfig(dir), /invalid value for "lifecycle.clearTitleOnNew"/);
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'effort: ""\n');
+  assert.throws(() => loadConfig(dir), /invalid value for "effort"/);
   fs.writeFileSync(path.join(dir, 'config.yaml'), 'modle: x\n');
   assert.throws(() => loadConfig(dir), /unknown key "modle"/);
   fs.writeFileSync(path.join(dir, 'config.json'), '{}');

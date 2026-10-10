@@ -19,13 +19,16 @@ host/commands.js           CLI host: event, work, run, items
         │     runner.js      model choice, prompt filling, prompt/script execution
         │     outputs.js     title / file / none (§5)
         │     paths.js       storage layout (§6)
-        └── adapters/      one directory per agent, registered in adapters/index.js
-              pi/index.js        { name, readTranscript, callModel }
+        ├── runners/        one-shot model CLI backends, registered in runners/index.js
+        │     index.js       runner selection and default (`pi`)
+        │     pi.js          `pi -p` model calls
+        │     jcode.js       `jcode run --json` model calls
+        └── adapters/       one directory per observed agent, registered in adapters/index.js
+              pi/index.js        { name, readTranscript }
               pi/transcript.js   Pi session JSONL → neutral transcript
-              pi/model.js        pi -p model calls
 ```
 
-Dependency direction: `bin → host → core + adapters`; `adapters → core` (helpers only); `core` imports nothing from `host` or `adapters`. The Pi extension imports `core/paths.js`, `core/outputs.js` and `core/config.js`; loading it in Pi pulls in the small YAML config parser but no item or model-runner code.
+Dependency direction: `bin → host → core + adapters + runners`; adapters read agent-specific sessions, runners execute one-shot model CLIs, and `core` remains independent from both registries. The Pi extension imports `core/paths.js`, `core/outputs.js` and `core/config.js`; loading it in Pi pulls in the small YAML config parser but no item or model-runner code.
 
 ## Data flow of one turn
 
@@ -34,7 +37,7 @@ Dependency direction: `bin → host → core + adapters`; `adapters → core` (h
 3. It spawns `node bin/agent-sidecar.js event --json <event>` detached with stdio ignored, and returns. Pi never waits.
 4. `event` validates the event, loads the items, takes the session lock, runs `planEvent` on `state.json`, saves the new state (cursors moved, `running` markers set), releases the lock.
 5. If something is due, it writes `jobs/<job>.json` and spawns `agent-sidecar work <job>` detached, with stdout/stderr going to `sidecar.log`. Then it exits.
-6. `work` records its pid in the `running` markers, reads the transcript once, and runs the job's items one after another: render the turn slice, fill the prompt, call `pi -p` (or run the script), apply the output. After each item it appends to `runs.jsonl` and, under the lock, clears `running` and stores `lastRun`. Finally it removes the job file.
+6. `work` records its pid in the `running` markers, reads the transcript once, and runs the job's items one after another: resolve the item/global runner (default `pi`) and effort, render the turn slice, fill the prompt, call that runner (or run the script), and apply the output. After each item it appends the selected runner and effort to `runs.jsonl` and, under the lock, clears `running` and stores `lastRun`. Finally it removes the job file.
 7. If an item wrote `title.txt`, the extension (which polls that file once a second) calls `ctx.ui.setTitle`. Herdr's pane title was already set in step 6.
 
 ## Why two detached hops
@@ -49,12 +52,18 @@ Dependency direction: `bin → host → core + adapters`; `adapters → core` (h
 - One item never runs twice at once in a session (the `running` marker). Different items, and different sessions, run in parallel.
 - Crashed workers are detected by a dead pid or a 30-minute age; the item is then scheduled again on the next due event.
 
-## Adding an agent
+## Adding an agent adapter
 
-1. `adapters/<agent>/index.js` exporting `{ name, readTranscript, callModel }` (CONTRACT §2), registered in `adapters/index.js`.
-2. A reader for that agent's session format producing the neutral transcript (active branch, roles `user`/`assistant`/`tool`).
-3. A model backend: usually the agent's own headless mode (e.g. `claude -p`, `codex exec`), with the agent's hooks/extensions disabled in that child.
-4. The in-agent part: a hook or extension that sends the event when a turn has finished. For hook-only agents this is a few lines of shell that pipe the event into `agent-sidecar event`. If the agent cannot set its own title from inside, `title` output still reaches Herdr panes through `pane`.
-5. Tests: a fixture session file, reader tests, and an end-to-end `event --foreground` test like `tests/cli.test.js`.
+1. Add `adapters/<agent>/index.js` exporting `{ name, readTranscript }` (CONTRACT §2), then register it in `adapters/index.js`.
+2. Add a reader for that agent's session format producing the neutral transcript (active branch, roles `user`/`assistant`/`tool`).
+3. Add the in-agent hook or extension that sends the event when a turn has finished. If the agent cannot set its own title from inside, `title` output still reaches Herdr panes through `pane`.
+4. Add tests: a fixture session file, reader tests, and an end-to-end `event --foreground` test like `tests/cli.test.js`.
 
-Nothing in `core/` or `host/` changes, except that `validateEvent` learns the new name from the registry automatically.
+## Adding a model runner
+
+1. Add `runners/<runner>.js` exporting `{ name, callModel({ model, effort, prompt, timeoutMs, env }) }` (CONTRACT §2.1), then register it in `runners/index.js`.
+2. Implement the agent's one-shot CLI invocation, map the normalized `effort` to its own flag or argument when supported, handle stdin/stdout, timeout and non-zero exit errors. A runner may deliberately use its own config for effort when the CLI has no per-call option. Disable hooks/extensions in the child when needed to prevent recursion.
+3. Select it with the global `runner` config or an item's `runner` field. The observed agent adapter does not need to change.
+4. Add runner tests using a fake executable; the existing Pi runner test is in `tests/pi-adapter.test.js` for historical grouping.
+
+Adding either kind of integration leaves `core/` unchanged. Adding an agent also makes its name valid to `validateEvent`; adding a runner only changes runner selection.

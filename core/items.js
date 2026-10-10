@@ -1,11 +1,11 @@
 // Item loader (CONTRACT.md "Items"). Every file format becomes the same Item:
-//   { name, file, dir, everyTurns, model, kind: 'prompt'|'script', prompt, script,
+//   { name, file, dir, everyTurns, runner, model, effort, kind: 'prompt'|'script', prompt, script,
 //     context: 'delta'|'session', output: {type:'title'}|{type:'file', path}|{type:'none'} }
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_EXTS, MARKDOWN_EXTS, parseDataFile, parseMarkdown } from './files.js';
 
-const KEYS = new Set(['name', 'everyTurns', 'model', 'prompt', 'script', 'context', 'output']);
+const KEYS = new Set(['name', 'everyTurns', 'runner', 'model', 'effort', 'prompt', 'script', 'context', 'output']);
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
 
 // Returns { items, errors }; a file with an error is skipped, the others still load.
@@ -57,8 +57,16 @@ function validateItem(raw, file) {
 
   if (!Number.isInteger(raw.everyTurns) || raw.everyTurns < 1) throw new Error('everyTurns must be an integer >= 1');
 
+  if (raw.runner !== undefined && (typeof raw.runner !== 'string' || raw.runner.trim() === '')) {
+    throw new Error('runner must be a non-empty string');
+  }
+
   if (raw.model !== undefined && (typeof raw.model !== 'string' || raw.model.trim() === '')) {
     throw new Error('model must be a non-empty string');
+  }
+
+  if (raw.effort !== undefined && (typeof raw.effort !== 'string' || raw.effort.trim() === '')) {
+    throw new Error('effort must be a non-empty string');
   }
 
   const hasPrompt = raw.prompt !== undefined;
@@ -75,7 +83,9 @@ function validateItem(raw, file) {
     file,
     dir: path.dirname(file),
     everyTurns: raw.everyTurns,
+    runner: raw.runner ?? null,
     model: raw.model ?? null,
+    effort: raw.effort ?? null,
     kind: hasPrompt ? 'prompt' : 'script',
     prompt: hasPrompt ? raw.prompt : null,
     script: hasScript ? raw.script : null,

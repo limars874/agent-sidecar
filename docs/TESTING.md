@@ -7,14 +7,14 @@ npm ci
 npm test            # node --test: runs tests/*.test.js
 ```
 
-No network, Pi or Herdr is needed. `tests/fixtures/fake-pi.js` stands in for `pi -p` (records args, prompt and the `AGENT_SIDECAR_CHILD` guard; replies with `$FAKE_PI_REPLY` or fails with `$FAKE_PI_EXIT`), `tests/fixtures/fake-herdr.js` records Herdr calls. Each test gets its own storage root in the temp directory (`tests/helpers.js` `sandbox`).
+No network, Pi, Jcode or Herdr is needed. `tests/fixtures/fake-pi.js` stands in for the default Pi runner (`pi -p`; it records args including `--thinking`, prompt and the `AGENT_SIDECAR_CHILD` guard; replies with `$FAKE_PI_REPLY` or fails with `$FAKE_PI_EXIT`), `tests/fixtures/fake-jcode.js` stands in for `jcode run --json`, and `tests/fixtures/fake-herdr.js` records Herdr calls. Each test gets its own storage root in the temp directory (`tests/helpers.js` `sandbox`).
 
 | File | Covers |
 |---|---|
-| `tests/items.test.js` | Markdown / YAML / JSON items, defaults, every validation error, skipping bad and duplicate files, global config |
-| `tests/core.test.js` | Scheduler (due, idempotent, running, stale, shorter branch), transcript slicing / rendering / truncation, event validation, model priority, prompt filling, title cleaning, path templates, cross-process lock and stale-lock takeover, run staleness |
-| `tests/pi-adapter.test.js` | Pi JSONL reader (active branch only, roles, images, partial last line, missing header), `pi -p` arguments and guard, extension event building, child guard, extension → CLI → worker → `pi -p` end to end, title file → `ctx.ui.setTitle` |
-| `tests/cli.test.js` | `event --foreground` with title + file outputs, Herdr call, cursors, job cleanup, idempotence; session-model fallback; failure recording; "no model"; detached `event`; invalid input exit codes; script items; `run` and `--dry-run`; `items`; shipped examples |
+| `tests/items.test.js` | Markdown / YAML / JSON items, runner/effort fields, defaults, every validation error, skipping bad and duplicate files, global config |
+| `tests/core.test.js` | Scheduler (due, idempotent, running, stale, shorter branch), transcript slicing / rendering / truncation, event validation, runner/model/effort priority, Pi/Jcode model normalization, injected runner execution, prompt filling, title cleaning, path templates, cross-process lock and stale-lock takeover, run staleness |
+| `tests/pi-adapter.test.js` | Pi JSONL reader (active branch only, roles, images, partial last line, missing header), default Pi runner `pi -p` arguments/effort mapping and guard, extension event building, child guard, extension → CLI → worker → runner end to end, title file → `ctx.ui.setTitle` |
+| `tests/cli.test.js` | `event --foreground` with title + file outputs, Herdr call, cursors, job cleanup, idempotence; session-model fallback; Pi and Jcode runners; effort forwarding; failure recording; "no model"; detached `event`; invalid input exit codes; script items; `run` and `--dry-run`; `items`; shipped examples |
 
 `tests/fixtures/pi-session.jsonl` is a Pi v3 session with an abandoned branch, tool calls, an image and a half-written last line.
 

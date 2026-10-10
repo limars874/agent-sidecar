@@ -7,10 +7,12 @@ import { test } from 'node:test';
 import { validateEvent } from '../core/event.js';
 import { cleanTitle, expandPathTemplate } from '../core/outputs.js';
 import { safeSegment } from '../core/paths.js';
-import { fillPrompt, resolveModel } from '../core/runner.js';
+import { fillPrompt, resolveEffort, resolveModel, runItem } from '../core/runner.js';
 import { emptyState, planEvent } from '../core/scheduler.js';
 import { readState, runIsStale, updateState, withLock } from '../core/state.js';
 import { countTurns, renderTranscript, sliceTurns } from '../core/transcript.js';
+import { DEFAULT_RUNNER, getRunner, resolveRunnerName } from '../runners/index.js';
+import { buildJcodeArgs, normalizeJcodeModel } from '../runners/jcode.js';
 
 const item = (name, everyTurns, context = 'delta') => ({ name, everyTurns, context });
 const plan = (items, state, turn, isStale = () => false) =>
@@ -87,6 +89,70 @@ test('model priority: item, then global, then session', () => {
   assert.equal(resolveModel({ model: null }, { model: 'global/m' }, event), 'global/m');
   assert.equal(resolveModel({ model: null }, { model: null }, event), 'session/m');
   assert.equal(resolveModel({ model: null }, { model: null }, { model: null }), null);
+});
+
+test('runner selection: item, then global, then Pi default', () => {
+  assert.equal(resolveRunnerName({ runner: 'claude' }, { runner: 'pi' }), 'claude');
+  assert.equal(resolveRunnerName({ runner: null }, { runner: 'pi' }), 'pi');
+  assert.equal(resolveRunnerName({ runner: null }, { runner: null }), DEFAULT_RUNNER);
+  assert.equal(getRunner('pi').name, 'pi');
+  assert.equal(getRunner('jcode').name, 'jcode');
+  assert.throws(() => getRunner('claude'), /unknown runner/);
+});
+
+test('jcode runner: normalizes Pi model names and supports provider profiles', () => {
+  assert.deepEqual(normalizeJcodeModel('openai-codex/gpt-5.6-luna:xhigh'), {
+    model: 'gpt-5.6-luna',
+    provider: 'openai',
+    providerProfile: null,
+  });
+  assert.deepEqual(normalizeJcodeModel('gemini-3.8-flash-high'), {
+    model: 'gemini-3.8-flash-high',
+    provider: null,
+    providerProfile: null,
+  });
+  assert.deepEqual(normalizeJcodeModel('cpa/gemini-3.8-flash-high', { providerProfile: 'cpa-gemini-3-8' }), {
+    model: 'gemini-3.8-flash-high',
+    provider: null,
+    providerProfile: 'cpa-gemini-3-8',
+  });
+  const args = buildJcodeArgs({ model: 'openai-codex/gpt-5.6-luna', env: {} });
+  assert.deepEqual(args.slice(0, 7), ['run', '--json', '--quiet', '--no-update', '--no-selfdev', '--tool-profile', 'none']);
+  assert.deepEqual(args.slice(-4), ['--provider', 'openai', '--model', 'gpt-5.6-luna']);
+});
+
+test('effort selection: item overrides global and defaults to null', () => {
+  assert.equal(resolveEffort({ effort: 'low' }, { effort: 'high' }), 'low');
+  assert.equal(resolveEffort({ effort: null }, { effort: 'high' }), 'high');
+  assert.equal(resolveEffort({ effort: null }, { effort: null }), null);
+});
+
+test('prompt execution delegates model work to the injected runner', () => {
+  const calls = [];
+  const result = runItem({
+    item: { name: 'summary', kind: 'prompt', prompt: 'Summarize', output: { type: 'none' } },
+    runner: {
+      name: 'fake',
+      callModel(args) {
+        calls.push(args);
+        return 'done';
+      },
+    },
+    transcript: { cwd: '/work/demo', messages: [{ role: 'user', text: 'hello' }] },
+    event: { agent: 'pi', session: 's', model: 'session/model', pane: null },
+    config: { model: null, timeoutMs: 42, maxTranscriptChars: 1000, toolResultLines: 20 },
+    root: '/tmp',
+    sessionDir: '/tmp/session',
+    fromTurn: 0,
+    toTurn: 1,
+    env: process.env,
+    now: new Date(),
+  });
+  assert.equal(result.text, 'done');
+  assert.equal(calls[0].model, 'session/model');
+  assert.equal(calls[0].effort, null);
+  assert.equal(calls[0].timeoutMs, 42);
+  assert.match(calls[0].prompt, /hello/);
 });
 
 test('prompt filling appends the transcript when the prompt does not place it', () => {
