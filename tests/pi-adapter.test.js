@@ -4,7 +4,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { buildEvent, createExtension } from '../adapters/pi/extension.js';
 import { callPiModel, PI_ARGS, preparePiModel } from '../runners/pi.js';
-import { readPiSession } from '../adapters/pi/transcript.js';
+import { readPiSession, readPiSessionInfo } from '../adapters/pi/transcript.js';
 import { countTurns } from '../core/transcript.js';
 import { PI_SESSION, PI_SESSION_ID, readJsonLines, sandbox, waitFor } from './helpers.js';
 
@@ -27,6 +27,17 @@ test('Pi session: active branch only, roles mapped, partial last line ignored', 
     { role: 'assistant', text: 'Renamed a.txt to c.txt.' },
   ]);
   assert.equal(countTurns(t.messages), 2);
+});
+
+test('Pi session info reads only the header metadata', (t) => {
+  const box = sandbox(t);
+  const file = path.join(box.dir, 'header-only.jsonl');
+  fs.writeFileSync(file, '{"type":"session","version":3,"id":"header-only","timestamp":"2026-10-31T23:30:00.000Z"}\nnot-json\n');
+  assert.deepEqual(readPiSessionInfo(file), {
+    session: 'header-only',
+    createdAt: '2026-10-31T23:30:00.000Z',
+    createdAtError: null,
+  });
 });
 
 test('Pi runner: explicit effort uses --thinking and overrides a model suffix', (t) => {

@@ -25,7 +25,7 @@ host/commands.js           CLI host: event, work, run, items
         │     pi.js          `pi -p` model calls
         │     jcode.js       `jcode run --json` model calls
         └── adapters/       one directory per observed agent, registered in adapters/index.js
-              pi/index.js        { name, readTranscript }
+              pi/index.js        { name, readSessionInfo, readTranscript }
               pi/transcript.js   Pi session JSONL → neutral transcript + createdAt
 ```
 
@@ -36,9 +36,9 @@ Dependency direction: `bin → host → core + adapters + runners`; adapters rea
 1. Pi fires `session_start` when a session starts or changes. For `new` and `resume`, the extension reads the global lifecycle policy and, when enabled, clears the pane label and the sidecar-owned Herdr metadata title. A configured resume cleanup also suppresses the immediate restoration of that session's saved terminal title.
 2. Pi fires `agent_settled` (the run is fully done: no retry, compaction or queued message left). If it was not aborted, the extension builds the event from `ctx`: session id and file from `ctx.sessionManager`, model from `ctx.model`, pane from `$HERDR_PANE_ID`, turn = user messages on `getBranch()`.
 3. It spawns `node bin/agent-sidecar.js event --json <event>` detached with stdio ignored, and returns. Pi never waits.
-4. `event` validates the event, loads the items, takes the session lock, runs `planEvent` on `state.json`, saves the new state (`scheduledThrough` and `running` markers set), releases the lock.
+4. `event` validates the event, reads only the agent session header, derives the immutable `createdAt`/UTC `sessionMonth` context, and atomically publishes canonical `out/<agent>/<sessionMonth>/<session>/metadata.json` on the first valid observation. It then loads the items, takes the session lock, runs `planEvent` on `state.json`, saves the new state (`scheduledThrough` and `running` markers set), and releases the lock.
 5. If something is due, it writes `jobs/<job>.json` and spawns `agent-sidecar work <job>` detached, with stdout/stderr going to `sidecar.log`. Then it exits.
-6. `work` records its pid in the `running` markers, reads the transcript once, derives the immutable `createdAt`/UTC `sessionMonth` context, and atomically publishes canonical `out/<agent>/<sessionMonth>/<session>/metadata.json` without overwriting an existing valid file. It then runs the job's items one after another: resolve the item/global runner (default `pi`) and effort, select the context scope/roles/files and budget, fill the prompt, call that runner (or run the script), and apply the output. File outputs can append activity records or atomically replace current-state snapshots. After each item it appends the selected runner and effort to `runs.jsonl` and, under the lock, clears `running`, stores `lastRun`, and advances `completedThrough` only after success. Finally it removes the job file.
+6. `work` records its pid in the `running` markers, reads the full transcript once, and rechecks metadata as an idempotent fallback. It then runs the job's items one after another: resolve the item/global runner (default `pi`) and effort, select the context scope/roles/files and budget, fill the prompt, call that runner (or run the script), and apply the output. File outputs can append activity records or atomically replace current-state snapshots. After each item it appends the selected runner and effort to `runs.jsonl` and, under the lock, clears `running`, stores `lastRun`, and advances `completedThrough` only after success. Finally it removes the job file.
 7. If an item wrote `title.txt`, the extension (which polls that file once a second) calls `ctx.ui.setTitle`. Herdr's pane title was already set in step 6.
 
 ## Why two detached hops
@@ -56,8 +56,8 @@ Dependency direction: `bin → host → core + adapters + runners`; adapters rea
 
 ## Adding an agent adapter
 
-1. Add `adapters/<agent>/index.js` exporting `{ name, readTranscript }` (CONTRACT §2), then register it in `adapters/index.js`.
-2. Add a reader for that agent's session format producing the neutral transcript (active branch, roles `user`/`assistant`/`toolCall`/`toolResult`). Keep tool calls separate so context projections can filter them.
+1. Add `adapters/<agent>/index.js` exporting `{ name, readSessionInfo, readTranscript }` (CONTRACT §2), then register it in `adapters/index.js`.
+2. Add a lightweight header reader for `readSessionInfo`, plus a full reader producing the neutral transcript (active branch, roles `user`/`assistant`/`toolCall`/`toolResult`). Keep tool calls separate so context projections can filter them.
 3. Add the in-agent hook or extension that sends the event when a turn has finished. If the agent cannot set its own title from inside, `title` output still reaches Herdr panes through `pane`.
 4. Add tests: a fixture session file, reader tests, and an end-to-end `event --foreground` test like `tests/cli.test.js`.
 

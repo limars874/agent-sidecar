@@ -152,7 +152,7 @@ echo '{"v":1,"agent":"pi","session":"…","transcriptRef":"….jsonl","turn":4}'
   state/pi/<session>/title.txt, runs.jsonl, sidecar.log, state.json
 ```
 
-When an item does not seem to run, check `agent-sidecar items`, then `state/pi/<session>/sidecar.log` and `runs.jsonl`. Switching an item to `{sessionMonth}` does not migrate or read its old output path; old files remain in place for manual migration if needed.
+Metadata is created on the first valid session event, independently of item trigger intervals; `summary.md` and `knowledge.md` still wait for their configured turns. When an item does not seem to run, check `agent-sidecar items`, then `state/pi/<session>/sidecar.log` and `runs.jsonl`. Switching an item to `{sessionMonth}` does not migrate or read its old output path; old files remain in place for manual migration if needed.
 
 ## Tests
 

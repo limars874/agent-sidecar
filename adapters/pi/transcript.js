@@ -3,9 +3,23 @@
 // active branch ends at the last entry in the file and follows parentId to
 // the root; abandoned branches are left out.
 import fs from 'node:fs';
+import { StringDecoder } from 'node:string_decoder';
 import { normalizeCreatedAt } from '../../core/session.js';
 
 const TOOL_ARGS_MAX = 300;
+const MAX_HEADER_BYTES = 1024 * 1024;
+
+export function readPiSessionInfo(file) {
+  const line = readFirstLine(file);
+  let header;
+  try {
+    header = JSON.parse(line);
+  } catch (err) {
+    throw new Error(`${file}: invalid Pi session header: ${err.message}`);
+  }
+  if (header?.type !== 'session') throw new Error(`${file}: not a Pi session (no session header)`);
+  return { session: header.id, ...readCreatedAt(file, header) };
+}
 
 export function readPiSession(file) {
   const lines = fs.readFileSync(file, 'utf8').split('\n');
@@ -30,13 +44,7 @@ export function readPiSession(file) {
   }
   if (!header) throw new Error(`${file}: not a Pi session (no session header)`);
 
-  let createdAt = null;
-  let createdAtError = null;
-  try {
-    createdAt = normalizeCreatedAt(header.timestamp, `${file}: session header timestamp`);
-  } catch (err) {
-    createdAtError = err.message;
-  }
+  const { createdAt, createdAtError } = readCreatedAt(file, header);
 
   const branch = [];
   const seen = new Set();
@@ -54,6 +62,37 @@ export function readPiSession(file) {
     createdAtError,
     messages: branch.filter((e) => e.type === 'message').flatMap((e) => toMessages(e.message)),
   };
+}
+
+function readCreatedAt(file, header) {
+  try {
+    return { createdAt: normalizeCreatedAt(header.timestamp, `${file}: session header timestamp`), createdAtError: null };
+  } catch (err) {
+    return { createdAt: null, createdAtError: err.message };
+  }
+}
+
+function readFirstLine(file) {
+  const fd = fs.openSync(file, 'r');
+  const decoder = new StringDecoder('utf8');
+  const buffer = Buffer.alloc(8192);
+  let text = '';
+  let bytes = 0;
+  try {
+    while (bytes < MAX_HEADER_BYTES) {
+      const size = Math.min(buffer.length, MAX_HEADER_BYTES - bytes);
+      const read = fs.readSync(fd, buffer, 0, size, null);
+      if (read === 0) break;
+      bytes += read;
+      text += decoder.write(buffer.subarray(0, read));
+      const newline = text.indexOf('\n');
+      if (newline >= 0) return text.slice(0, newline);
+    }
+    text += decoder.end();
+    return text.split('\n').find((line) => line.trim() !== '') ?? '';
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 // The session's current model: the latest model switch or assistant reply on the branch.

@@ -79,6 +79,10 @@ export function ensureSessionMetadata({ root, event, sessionContext }) {
     createdAt: sessionContext.createdAt,
   };
   fs.mkdirSync(dir, { recursive: true });
+  if (fs.existsSync(file)) {
+    readExistingMetadata(file, metadata);
+    return { written: file, warning: null };
+  }
   const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
   let fd = null;
   try {

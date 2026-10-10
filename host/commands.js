@@ -30,13 +30,27 @@ function loadItemsLogged(root, dir) {
   return items;
 }
 
+function prepareSessionMetadata(root, event, sessionContext, dir) {
+  try {
+    const metadata = ensureSessionMetadata({ root, event, sessionContext });
+    if (metadata.warning) log(dir, metadata.warning);
+  } catch (err) {
+    log(dir, `session metadata failed: ${err.message}`);
+  }
+}
+
 // `agent-sidecar event`: decide what is due, record it, hand it to a detached worker.
 export function handleEvent(rawEvent, { root, env, foreground = false }) {
   const event = validateEvent(rawEvent, Object.keys(ADAPTERS));
   const adapter = getAdapter(event.agent);
   const dir = sessionDir(root, event.agent, event.session);
+  const sessionInfo = adapter.readSessionInfo
+    ? adapter.readSessionInfo(event.transcriptRef)
+    : adapter.readTranscript(event.transcriptRef);
+  const sessionContext = getSessionContext(sessionInfo, event);
+  prepareSessionMetadata(root, event, sessionContext, dir);
   const items = loadItemsLogged(root, dir);
-  const turn = event.turn ?? countTurns(adapter.readTranscript(event.transcriptRef).messages);
+  const turn = event.turn ?? countTurns(sessionInfo.messages ?? adapter.readTranscript(event.transcriptRef).messages);
 
   const job = `${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
   const { due, skipped } = updateState(dir, (state) =>
@@ -78,12 +92,7 @@ export function work(jobFile, { root, env }) {
     items = loadItemsLogged(root, dir);
     transcript = getAdapter(event.agent).readTranscript(event.transcriptRef);
     sessionContext = getSessionContext(transcript, event);
-    try {
-      const metadata = ensureSessionMetadata({ root, event, sessionContext });
-      if (metadata.warning) log(dir, metadata.warning);
-    } catch (err) {
-      log(dir, `session metadata failed: ${err.message}`);
-    }
+    prepareSessionMetadata(root, event, sessionContext, dir);
   } catch (err) {
     setupError = err.message;
   }
