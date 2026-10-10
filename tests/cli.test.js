@@ -48,6 +48,21 @@ test('event --foreground: due items run, outputs written, cursors saved', (t) =>
   assert.deepEqual(again.scheduled, []);
 });
 
+test('event creates session metadata before any item is due', (t) => {
+  const box = sandbox(t);
+  box.item('title.md', 'everyTurns: 2\noutput: title\nprompt: Title');
+  const r = cli(['event', '--foreground', '--json', JSON.stringify(event({ turn: 1 }))], box.env);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(r.json().scheduled, []);
+  const dir = path.join(box.root, 'out', 'pi', '2026-10', PI_SESSION_ID);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'metadata.json'), 'utf8')), {
+    sessionId: PI_SESSION_ID,
+    agent: 'pi',
+    createdAt: '2026-10-09T10:00:00.000Z',
+  });
+  assert.equal(fs.existsSync(path.join(box.stateDir(), 'runs.jsonl')), false);
+});
+
 test('summary snapshot replaces the previous file and feeds it into the next delta', (t) => {
   const box = sandbox(t);
   box.item('summary.yaml', 'everyTurns: 1\ncontext:\n  scope: delta\n  include: [user, assistant]\n  files:\n    - "out/{agent}/{session}/summary.md"\noutput:\n  file: out/{agent}/{session}/summary.md\n  mode: replace\nprompt: Summarize');

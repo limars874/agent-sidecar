@@ -42,7 +42,7 @@ One developer running agent sessions (initially Pi) in terminals or Herdr panes,
 | R18 | Support both activity logs and current-state files. | File output defaults to `append`; `mode: replace` atomically replaces a snapshot. |
 | R19 | Make scheduled execution semantics explicit. | At-least-once delivery: replace snapshots are usually repeat-safe; append logs may duplicate after a crash window. |
 | R20 | Group session outputs by the original creation month. | `{sessionMonth}` is derived from the session header timestamp in UTC and remains stable across retries and later writes. |
-| R21 | Record stable session metadata once. | Canonical `out/{agent}/{sessionMonth}/{session}/metadata.json`, created exclusively and never overwritten. |
+| R21 | Record stable session metadata once. | Canonical `out/{agent}/{sessionMonth}/{session}/metadata.json`, created on the first valid session event, exclusively and never overwritten. |
 
 ## Non-goals (v1)
 

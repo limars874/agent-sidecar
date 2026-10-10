@@ -39,10 +39,12 @@ An adapter is one entry in `adapters/index.js`:
 ```js
 {
   name: 'pi',
+  readSessionInfo(transcriptRef) → { session, createdAt, createdAtError? },
   readTranscript(transcriptRef) → { session, cwd, model, createdAt, createdAtError?, messages: [{ role, text, name? }] },
 }
 ```
 
+- `readSessionInfo` reads only the agent's lightweight session header for the first-event metadata step; it must not parse the full transcript.
 - `readTranscript` returns the session's **active branch** only, oldest first. `role` is `user`, `assistant`, `toolCall` or `toolResult`. A turn starts at each `user` message. `name` is the tool name for tool messages. Tool calls remain separate from assistant text so an item can filter them; hidden reasoning is left out.
 - `createdAt` is the original session creation time as a normalized UTC ISO 8601 string, read from the agent's session header. `createdAtError` is a diagnostic when the header timestamp is missing or invalid; readers continue to provide the transcript so legacy paths can still run, but `{sessionMonth}` paths and automatic metadata then fail visibly instead of using the current time.
 - `model` is the session's current model as far as the transcript shows it (Pi: the latest model switch or assistant reply on the branch), or null. `agent-sidecar run` uses it as the session model when `--model` is not given.
@@ -207,7 +209,7 @@ The lifecycle settings are global behavior, not items: they do not call a model 
 
 Path template placeholders: `{agent}`, `{session}`, `{sessionMonth}` (UTC `YYYY-MM` from the original session creation time), `{item}`, and `{date}` (local `YYYY-MM-DD` at write time). Any other `{…}` is an error. `~/` expands to `$HOME`; relative paths are relative to the storage root. `{agent}` and `{session}` are made safe for one path segment. `{sessionMonth}` is unavailable when the session header has no valid creation time and produces an explicit error.
 
-The sidecar also creates one automatic metadata file at `out/{agent}/{sessionMonth}/{session}/metadata.json` when a normal `work` or non-dry `run` first processes a session. Its minimum content is:
+The sidecar also creates one automatic metadata file at `out/{agent}/{sessionMonth}/{session}/metadata.json` when the first valid `event` observes a session. `work` and non-dry `run` retain the same idempotent creation as a fallback. Its minimum content is:
 
 ```json
 {"sessionId":"0199a3f2-…","agent":"pi","createdAt":"2026-10-10T13:35:00.000Z"}
