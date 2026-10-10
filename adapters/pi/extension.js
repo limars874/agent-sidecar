@@ -4,12 +4,18 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { TITLE_FILE } from '../../core/outputs.js';
-import { rootDir, sessionDir } from '../../core/paths.js';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+// 通过真实文件路径解析包内模块；Pi 从 symlink 加载全局 extension 时，
+// 静态相对 import 会错误地从 ~/.pi/agent/extensions 解析，而不是从仓库解析。
+const EXTENSION_DIR = path.dirname(fs.realpathSync(fileURLToPath(import.meta.url)));
+const [{ TITLE_FILE }, { rootDir, sessionDir }] = await Promise.all([
+  import(pathToFileURL(path.resolve(EXTENSION_DIR, '../../core/outputs.js')).href),
+  import(pathToFileURL(path.resolve(EXTENSION_DIR, '../../core/paths.js')).href),
+]);
 
 // Resolve through the symlink so the CLI is found next to the real file.
-const BIN = path.resolve(path.dirname(fs.realpathSync(fileURLToPath(import.meta.url))), '../../bin/agent-sidecar.js');
+const BIN = path.resolve(EXTENSION_DIR, '../../bin/agent-sidecar.js');
 const TITLE_POLL_MS = 1000;
 
 export function buildEvent(ctx, env = process.env) {
