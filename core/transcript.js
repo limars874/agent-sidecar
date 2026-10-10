@@ -1,6 +1,8 @@
-// Agent-neutral transcript (CONTRACT.md "Adapters"): adapters turn their own
-// session format into { session, cwd, messages: [{ role, text, name? }] } with
-// role 'user' | 'assistant' | 'tool'. A turn starts at each user message.
+// Agent-neutral transcript (CONTRACT.md "Adapters"):
+// adapters turn their own session format into structured messages. A turn starts
+// at each user message; tool calls and tool results remain independently filterable.
+
+export const TRANSCRIPT_ROLES = Object.freeze(['user', 'assistant', 'toolCall', 'toolResult']);
 
 export function countTurns(messages) {
   return messages.filter((m) => m.role === 'user').length;
@@ -17,16 +19,57 @@ export function sliceTurns(messages, fromTurn, toTurn) {
   return out;
 }
 
-export function renderTranscript(messages, { maxChars, toolResultLines }) {
-  const blocks = messages.map((m) => {
-    if (m.role === 'tool') return `[tool${m.name ? ` ${m.name}` : ''}]\n${truncateLines(m.text, toolResultLines)}`;
-    return `[${m.role}]\n${m.text}`;
-  });
-  const text = blocks.join('\n\n');
-  if (text.length <= maxChars) return text;
-  // Keep the most recent part: it is what changed since the last run.
-  const marker = '[… earlier transcript truncated]\n\n';
-  return marker + text.slice(text.length - (maxChars - marker.length));
+export function selectMessages(messages, include = null) {
+  if (!include) return messages;
+  const allowed = new Set(include);
+  return messages.filter((message) => allowed.has(normalizeRole(message.role)));
+}
+
+export function formatTranscriptBlocks(messages, { toolResultLines = 20, include = null } = {}) {
+  return selectMessages(messages, include).map((message) => formatMessage(message, toolResultLines));
+}
+
+export function renderTranscript(messages, { maxChars, toolResultLines, include } = {}) {
+  return renderBlocks(formatTranscriptBlocks(messages, { toolResultLines, include }), maxChars);
+}
+
+// Render whole message blocks first, then keep the newest complete blocks within
+// the budget. Only a single oversized block is cut as a last resort.
+export function renderBlocks(blocks, maxChars = Infinity) {
+  const textBlocks = blocks.filter((block) => block !== '');
+  const text = textBlocks.join('\n\n');
+  if (!Number.isFinite(maxChars) || text.length <= maxChars) return text;
+
+  const marker = '[… earlier context truncated]\n\n';
+  if (maxChars <= marker.length) return marker.slice(0, maxChars);
+
+  let remaining = maxChars - marker.length;
+  const kept = [];
+  for (let index = textBlocks.length - 1; index >= 0; index -= 1) {
+    const block = textBlocks[index];
+    const separatorLength = kept.length > 0 ? 2 : 0;
+    if (block.length + separatorLength <= remaining) {
+      kept.unshift(block);
+      remaining -= block.length + separatorLength;
+      continue;
+    }
+    if (kept.length === 0 && remaining > 0) kept.unshift(block.slice(0, remaining));
+    break;
+  }
+  return `${marker}${kept.join('\n\n')}`;
+}
+
+function normalizeRole(role) {
+  return role === 'tool' ? 'toolResult' : role;
+}
+
+function formatMessage(message, toolResultLines) {
+  const role = normalizeRole(message.role);
+  if (role === 'toolResult') {
+    return `[tool${message.name ? ` ${message.name}` : ''}]\n${truncateLines(message.text ?? '', toolResultLines)}`;
+  }
+  if (role === 'toolCall') return `[toolCall${message.name ? ` ${message.name}` : ''}]\n${message.text ?? ''}`;
+  return `[${role}]\n${message.text ?? ''}`;
 }
 
 function truncateLines(text, max) {

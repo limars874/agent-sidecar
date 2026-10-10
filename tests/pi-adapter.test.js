@@ -15,12 +15,13 @@ test('Pi session: active branch only, roles mapped, partial last line ignored', 
   assert.equal(t.model, 'anthropic/m', 'latest assistant reply on the branch');
   assert.deepEqual(t.messages, [
     { role: 'user', text: 'List the files' },
-    { role: 'assistant', text: 'Listing.\n→ bash {"command":"ls"}' },
-    { role: 'tool', name: 'bash', text: 'a.txt\nb.txt' },
+    { role: 'assistant', text: 'Listing.' },
+    { role: 'toolCall', name: 'bash', text: '{"command":"ls"}' },
+    { role: 'toolResult', name: 'bash', text: 'a.txt\nb.txt' },
     { role: 'assistant', text: 'Two files: a.txt and b.txt.' },
     { role: 'user', text: 'Rename a.txt to c.txt\n[image]' },
-    { role: 'assistant', text: '→ bash {"command":"mv a.txt c.txt"}' },
-    { role: 'tool', name: 'bash', text: '' },
+    { role: 'toolCall', name: 'bash', text: '{"command":"mv a.txt c.txt"}' },
+    { role: 'toolResult', name: 'bash', text: '' },
     { role: 'assistant', text: 'Renamed a.txt to c.txt.' },
   ]);
   assert.equal(countTurns(t.messages), 2);

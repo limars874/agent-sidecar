@@ -11,10 +11,10 @@ No network, Pi, Jcode or Herdr is needed. `tests/fixtures/fake-pi.js` stands in 
 
 | File | Covers |
 |---|---|
-| `tests/items.test.js` | Markdown / YAML / JSON items, runner/effort fields, defaults, every validation error, skipping bad and duplicate files, global config |
-| `tests/core.test.js` | Scheduler (due, idempotent, running, stale, shorter branch), transcript slicing / rendering / truncation, event validation, runner/model/effort priority, Pi/Jcode model normalization, injected runner execution, prompt filling, title cleaning, path templates, cross-process lock and stale-lock takeover, run staleness |
-| `tests/pi-adapter.test.js` | Pi JSONL reader (active branch only, roles, images, partial last line, missing header), default Pi runner `pi -p` arguments/effort mapping and guard, extension event building, child guard, extension → CLI → worker → runner end to end, title file → `ctx.ui.setTitle` |
-| `tests/cli.test.js` | `event --foreground` with title + file outputs, Herdr call, cursors, job cleanup, idempotence; session-model fallback; Pi and Jcode runners; effort forwarding; failure recording; "no model"; detached `event`; invalid input exit codes; script items; `run` and `--dry-run`; `items`; shipped examples |
+| `tests/items.test.js` | Markdown / YAML / JSON items, runner/effort/context fields, append/replace output modes, defaults, validation errors, skipping bad and duplicate files, global config |
+| `tests/core.test.js` | Scheduler (due, idempotent, running, stale, shorter branch, success checkpoint), structured transcript projection / role filtering / budgets, event validation, runner/model/effort priority, Pi/Jcode model normalization, injected runner execution, context files, prompt filling, title cleaning, append/replace outputs, path templates, cross-process lock and stale-lock takeover, run staleness |
+| `tests/pi-adapter.test.js` | Pi JSONL reader (active branch only, structured roles, images, partial last line, missing header), default Pi runner `pi -p` arguments/effort mapping and guard, extension event building, child guard, extension → CLI → worker → runner end to end, title file → `ctx.ui.setTitle` |
+| `tests/cli.test.js` | `event --foreground` with title + file outputs, Herdr call, scheduled/completed cursors, retry after failure, job cleanup, idempotence; replace snapshot repetition and append duplicate semantics; session-model fallback; Pi and Jcode runners; effort forwarding; "no model"; detached `event`; invalid input exit codes; script items; `run` and `--dry-run`; `items`; shipped examples |
 
 `tests/fixtures/pi-session.jsonl` is a Pi v3 session with an abandoned branch, tool calls, an image and a half-written last line.
 
@@ -35,8 +35,13 @@ Write a title of at most 6 words for this session. Reply with the title only.
 EOF
 cat > $AGENT_SIDECAR_HOME/items/summary.yaml <<'EOF'
 everyTurns: 1
+context:
+  scope: delta
+  include: [user, assistant]
+  maxChars: 12000
 output:
   file: out/{agent}/{session}/summary.md
+  mode: replace
 prompt: Summarize the conversation below in 2 bullets.
 EOF
 

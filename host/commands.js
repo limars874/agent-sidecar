@@ -112,8 +112,14 @@ export function work(jobFile, { root, env }) {
     appendLine(path.join(dir, RUNS_FILE), record);
     updateState(dir, (state) => {
       const s = state.items[d.name];
-      if (s?.running?.job === job.id) delete s.running;
-      if (s) s.lastRun = { at: record.at, status: record.status, fromTurn: d.fromTurn, toTurn: d.toTurn, error: record.error };
+      if (s?.running?.job !== job.id) return { state };
+      delete s.running;
+      s.lastRun = { at: record.at, status: record.status, fromTurn: d.fromTurn, toTurn: d.toTurn, error: record.error };
+      if (record.status === 'ok') {
+        s.completedThrough = d.toTurn;
+        s.lastTurn = d.toTurn;
+        s.scheduledThrough = Math.max(s.scheduledThrough ?? 0, d.toTurn);
+      }
       return { state };
     });
   }

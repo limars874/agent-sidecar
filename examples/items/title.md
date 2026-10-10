@@ -1,6 +1,10 @@
 ---
 everyTurns: 2
-context: session
+context:
+  scope: recent
+  turns: 4
+  include: [user, assistant]
+  maxChars: 12000
 output: title
 ---
 Write a title of at most 6 words for the coding session below. Name the task, not the tools.

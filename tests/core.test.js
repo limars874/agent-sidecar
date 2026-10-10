@@ -5,9 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { validateEvent } from '../core/event.js';
-import { cleanTitle, expandPathTemplate } from '../core/outputs.js';
+import { applyOutput, cleanTitle, expandPathTemplate } from '../core/outputs.js';
 import { safeSegment } from '../core/paths.js';
-import { fillPrompt, resolveEffort, resolveModel, runItem } from '../core/runner.js';
+import { fillPrompt, renderContext, resolveEffort, resolveModel, runItem } from '../core/runner.js';
 import { emptyState, planEvent } from '../core/scheduler.js';
 import { readState, runIsStale, updateState, withLock } from '../core/state.js';
 import { countTurns, renderTranscript, sliceTurns } from '../core/transcript.js';
@@ -25,10 +25,14 @@ test('scheduler: an item is due once everyTurns turns passed since its last run'
 
   r = plan([item('a', 2)], r.state, 2);
   assert.deepEqual(r.due, [{ name: 'a', fromTurn: 0, toTurn: 2 }]);
-  assert.equal(r.state.items.a.lastTurn, 2);
+  assert.equal(r.state.items.a.lastTurn, 0);
+  assert.equal(r.state.items.a.scheduledThrough, 2);
+  assert.equal(r.state.items.a.completedThrough, 0);
   assert.deepEqual(r.state.items.a.running, { job: 'j1', since: '2026-10-09T00:00:00.000Z' });
 
-  // The same turn reported twice does not run it twice.
+  // A successful worker advances the completion cursor; the same turn then stays idempotent.
+  r.state.items.a.completedThrough = 2;
+  r.state.items.a.lastTurn = 2;
   delete r.state.items.a.running;
   assert.deepEqual(plan([item('a', 2)], r.state, 2).due, []);
   assert.deepEqual(plan([item('a', 2)], r.state, 4).due, [{ name: 'a', fromTurn: 2, toTurn: 4 }]);
@@ -41,6 +45,8 @@ test('scheduler: running items are skipped unless stale; session context starts 
   assert.deepEqual(busy.due, [{ name: 'b', fromTurn: 0, toTurn: 3 }]);
   assert.equal(busy.state.items.a.lastTurn, 2, 'skipped item keeps its cursor');
   assert.equal(state.items.b.lastTurn, 2, 'input state is not mutated');
+  assert.equal(busy.state.items.b.scheduledThrough, 3);
+  assert.equal(busy.state.items.b.completedThrough, 2);
 
   const stale = plan([item('a', 1)], state, 3, () => true);
   assert.deepEqual(stale.due, [{ name: 'a', fromTurn: 2, toTurn: 3 }]);
@@ -66,10 +72,11 @@ test('transcript: turns, slicing and rendering', () => {
 
   const text = renderTranscript(messages, { maxChars: 10000, toolResultLines: 2 });
   assert.equal(text, '[user]\none\n\n[assistant]\nok\n\n[tool bash]\nl1\nl2\n… [2 more lines]\n\n[user]\ntwo\n\n[assistant]\ndone');
+  assert.equal(renderTranscript(messages, { maxChars: 10000, toolResultLines: 2, include: ['user', 'assistant'] }), '[user]\none\n\n[assistant]\nok\n\n[user]\ntwo\n\n[assistant]\ndone');
 
   const cut = renderTranscript(messages, { maxChars: 50, toolResultLines: 2 });
-  assert.equal(cut.length, 50);
-  assert.ok(cut.startsWith('[… earlier transcript truncated]'));
+  assert.ok(cut.length <= 50);
+  assert.ok(cut.startsWith('[… earlier context truncated]'));
   assert.ok(cut.endsWith('done'));
 });
 
@@ -155,6 +162,81 @@ test('prompt execution delegates model work to the injected runner', () => {
   assert.match(calls[0].prompt, /hello/);
 });
 
+test('context recent scope, role filtering and previous files are rendered within one budget', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'context-'));
+  const previous = path.join(dir, 'summary.md');
+  fs.writeFileSync(previous, 'Previous snapshot');
+  const result = runItem({
+    item: {
+      name: 'summary',
+      dir,
+      kind: 'prompt',
+      prompt: 'Summarize\n{{transcript}}',
+      context: 'recent',
+      contextSpec: { scope: 'recent', turns: 1, include: ['user', 'assistant'], maxChars: 1000, files: ['summary.md'] },
+      output: { type: 'none' },
+    },
+    runner: { name: 'fake', callModel: ({ prompt }) => prompt },
+    transcript: { cwd: '/work/demo', messages: [
+      { role: 'user', text: 'old request' },
+      { role: 'assistant', text: 'old answer' },
+      { role: 'user', text: 'new request' },
+      { role: 'assistant', text: 'new answer' },
+    ] },
+    event: { agent: 'pi', session: 's', model: 'session/model', pane: null },
+    config: { model: null, timeoutMs: 42, maxTranscriptChars: 1000, toolResultLines: 20 },
+    root: dir,
+    sessionDir: path.join(dir, 'state'),
+    fromTurn: 0,
+    toTurn: 2,
+    env: { HOME: dir },
+    now: new Date(),
+  });
+  assert.match(result.text, /\[file summary\.md\]\nPrevious snapshot/);
+  assert.doesNotMatch(result.text, /old request/);
+  assert.match(result.text, /new request/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('context files keep priority when files and transcript exceed the total budget', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'context-budget-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'summary.md'), 'Previous snapshot');
+  const item = {
+    name: 'summary',
+    dir,
+    contextSpec: { scope: 'delta', turns: null, include: ['user', 'assistant'], maxChars: 100, files: ['summary.md'] },
+  };
+  const rendered = renderContext(item, [
+    { role: 'user', text: 'new request' },
+    { role: 'assistant', text: 'new answer '.repeat(100) },
+  ], {
+    root: dir,
+    event: { agent: 'pi', session: 's' },
+    now: new Date(),
+    env: { HOME: dir },
+    fromTurn: 0,
+    toTurn: 1,
+    config: { maxTranscriptChars: 1000, toolResultLines: 20 },
+  });
+  assert.ok(rendered.length <= 100);
+  assert.match(rendered, /\[file summary\.md\]\nPrevious snapshot/);
+  assert.match(rendered, /\[assistant\]/);
+
+  fs.writeFileSync(path.join(dir, 'summary.md'), 'Previous snapshot '.repeat(100));
+  const oversizedFile = renderContext(item, [], {
+    root: dir,
+    event: { agent: 'pi', session: 's' },
+    now: new Date(),
+    env: { HOME: dir },
+    fromTurn: 0,
+    toTurn: 1,
+    config: { maxTranscriptChars: 1000, toolResultLines: 20 },
+  });
+  assert.ok(oversizedFile.length <= 100);
+  assert.match(oversizedFile, /^\[file summary\.md\]/);
+});
+
 test('prompt filling appends the transcript when the prompt does not place it', () => {
   assert.equal(fillPrompt('T {{toTurn}} {{transcript}} {{nope}}', { transcript: 'X', toTurn: 3 }), 'T 3 X {{nope}}');
   assert.equal(fillPrompt('Sum up', { transcript: 'X' }), 'Sum up\n\n<transcript>\nX\n</transcript>');
@@ -170,6 +252,19 @@ test('outputs: title cleaning and path templates', () => {
   assert.equal(safeSegment('..'), '_..');
 });
 
+test('outputs: replace mode atomically replaces a file while append remains a log', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'output-'));
+  const ctx = { root: dir, env: { HOME: dir }, now: new Date('2026-10-09T00:00:00Z'), item: { name: 'summary' }, event: { agent: 'pi', session: 's' }, fromTurn: 0, toTurn: 2 };
+  const output = { type: 'file', path: 'out/summary.md', mode: 'replace' };
+  assert.equal(applyOutput(output, 'first snapshot', ctx).written, path.join(dir, 'out/summary.md'));
+  assert.equal(fs.readFileSync(path.join(dir, 'out/summary.md'), 'utf8'), 'first snapshot\n');
+  applyOutput(output, 'second snapshot', ctx);
+  assert.equal(fs.readFileSync(path.join(dir, 'out/summary.md'), 'utf8'), 'second snapshot\n');
+  applyOutput({ ...output, mode: 'append' }, 'activity', ctx);
+  assert.match(fs.readFileSync(path.join(dir, 'out/summary.md'), 'utf8'), /second snapshot\n## .*summary.*\n\nactivity/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('state: lock excludes a second process and recovers from a dead holder', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'state-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -182,6 +277,8 @@ test('state: lock excludes a second process and recovers from a dead holder', as
     { stdio: ['ignore', 'pipe', 'inherit'] },
   );
   await new Promise((resolve) => holder.stdout.once('data', resolve));
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(path.join(dir, 'lock'), old, old);
   const started = Date.now();
   updateState(dir, (state) => ({ state: { ...state, items: { a: { lastTurn: 1 } } } }));
   assert.ok(Date.now() - started >= 200, 'waited for the other holder');

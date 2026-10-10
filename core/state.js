@@ -66,7 +66,7 @@ export function withLock(dir, fn) {
 function lockIsStale(lock) {
   try {
     const pid = Number(fs.readFileSync(lock, 'utf8'));
-    if (pid && !pidAlive(pid)) return true;
+    if (pid) return !pidAlive(pid);
     return Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS;
   } catch {
     return false; // gone already, or unreadable: retry instead of stealing

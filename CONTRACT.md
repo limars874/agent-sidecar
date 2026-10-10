@@ -30,7 +30,7 @@ An adapter reports each finished turn of an agent session as one JSON object, pa
 
 **Turn**: one user prompt and everything the agent did for it, until the agent is fully idle again. Model calls inside tool loops are not separate turns. A turn ends when the agent has settled (Pi: `agent_settled`). Aborted runs (Esc) are not reported.
 
-**Idempotence**: reporting the same `turn` twice schedules nothing the second time, because items run only when `turn` has moved at least `everyTurns` past their last run.
+**Idempotence**: reporting the same successfully completed `turn` twice schedules nothing the second time. If the first run failed, its `completedThrough` cursor is unchanged and a later event may retry the item.
 
 ## 2. Adapters
 
@@ -43,7 +43,7 @@ An adapter is one entry in `adapters/index.js`:
 }
 ```
 
-- `readTranscript` returns the session's **active branch** only, oldest first. `role` is `user`, `assistant` or `tool`. A turn starts at each `user` message. `name` is the tool name for `tool` messages. Assistant tool calls are rendered into the assistant's `text` (Pi: `→ bash {"command":"ls"}`). Hidden reasoning is left out.
+- `readTranscript` returns the session's **active branch** only, oldest first. `role` is `user`, `assistant`, `toolCall` or `toolResult`. A turn starts at each `user` message. `name` is the tool name for tool messages. Tool calls remain separate from assistant text so an item can filter them; hidden reasoning is left out.
 - `model` is the session's current model as far as the transcript shows it (Pi: the latest model switch or assistant reply on the branch), or null. `agent-sidecar run` uses it as the session model when `--model` is not given.
 - The transcript reader and the adapter's in-agent half stay in the agent-specific boundary; model execution belongs to a runner.
 
@@ -80,8 +80,8 @@ Items live in `<root>/items/`. Each `.md`, `.yaml`, `.yml` or `.json` file is on
 | `effort` | string | none | Reasoning effort for this item (see §3.4). |
 | `prompt` | string | — | A prompt for the model. Exactly one of `prompt` / `script`. |
 | `script` | string | — | A shell command (`/bin/sh -c`), run in the items directory. Exactly one of `prompt` / `script`. |
-| `context` | `delta` \| `session` | `delta` | `delta`: turns since the item's last run. `session`: the whole active branch. |
-| `output` | `title` \| `none` \| `{ file: <path template> }` | `none` | Where the result goes (§5). |
+| `context` | string or mapping | `delta` | Transcript scope and projection. A mapping can set `scope`, `turns`, `include`, `maxChars` and `files` (see §3.2). |
+| `output` | `title` \| `none` \| `{ file: <path template>, mode?: "append" \| "replace" }` | `none` | Where the result goes (§5). File output defaults to `append`. |
 
 Unknown keys are errors (to catch typos such as `every_turns`). An invalid file is skipped with a message in the session's `sidecar.log` and in `agent-sidecar items`; the other items still run.
 
@@ -92,7 +92,11 @@ Markdown: YAML frontmatter holds the fields; the body is the prompt. A body and 
 ```markdown
 ---
 everyTurns: 2
-context: session
+context:
+  scope: recent
+  turns: 4
+  include: [user, assistant]
+  maxChars: 12000
 output: title
 ---
 Write a title of at most 6 words for this session.
@@ -107,18 +111,36 @@ everyTurns: 3
 runner: pi
 effort: high
 model: anthropic/claude-haiku-4-5
+context:
+  scope: delta
+  include: [user, assistant, toolCall]
+  files:
+    - "out/{agent}/{session}/summary.md"
+  maxChars: 30000
 output:
   file: out/{agent}/{session}/summary.md
+  mode: replace
 prompt: |
-  Summarize turns {{fromTurn}}+1 to {{toTurn}} as bullets.
+  Maintain the complete current summary from the existing snapshot and this delta.
+  Return the replacement snapshot only.
   {{transcript}}
 ```
 
-### 3.2 Prompt placeholders
+### 3.2 Context and prompt placeholders
 
-`{{transcript}}`, `{{agent}}`, `{{session}}`, `{{item}}`, `{{turn}}` (= `toTurn`), `{{fromTurn}}`, `{{toTurn}}`, `{{cwd}}` (the session's working directory if the transcript has one). Unknown placeholders are left as written. If the prompt has no `{{transcript}}`, the transcript is appended inside `<transcript>…</transcript>`.
+`context` may be a legacy string (`delta` or `session`) or a mapping:
 
-The transcript covers turns `fromTurn+1 … toTurn`. Tool results are cut to `toolResultLines` lines each. If the rendered text is longer than `maxTranscriptChars`, the oldest part is cut and replaced by a marker.
+| Key | Type | Meaning |
+|---|---|---|
+| `scope` | `delta` \| `session` \| `recent` | `delta` covers turns `fromTurn+1 … toTurn`; `session` covers the active branch; `recent` covers the latest `turns` user turns. |
+| `turns` | integer ≥ 1 | Required for `recent`; not valid for other scopes. |
+| `include` | list | Optional roles to include: `user`, `assistant`, `toolCall`, `toolResult`. Defaults to all roles. |
+| `maxChars` | integer ≥ 1 | Per-item context budget. Defaults to global `maxTranscriptChars`. |
+| `files` | list of path templates | Optional files to preload as `[file …]` blocks. Relative paths resolve from the storage root and support the same placeholders as outputs; missing files are skipped. |
+
+Messages are selected by scope and role before rendering. When `files` are configured, file blocks are rendered first in listed order and reserve the budget; the transcript uses the remainder. A single oversized file may be truncated, and complete transcript message blocks are retained within the remaining budget where possible; only a single oversized message block is cut as a last resort. Tool results are additionally limited to `toolResultLines` lines each. The rendered context is available as `{{transcript}}` and is automatically appended inside `<transcript>…</transcript>` when the prompt does not place that placeholder.
+
+Other placeholders are `{{agent}}`, `{{session}}`, `{{item}}`, `{{turn}}` (= `toTurn`), `{{fromTurn}}`, `{{toTurn}}` and `{{cwd}}` (the session's working directory if the transcript has one). Unknown placeholders are left as written.
 
 ### 3.3 Runner choice
 
@@ -179,9 +201,14 @@ The lifecycle settings are global behavior, not items: they do not call a model 
 |---|---|
 | `none` | Result discarded (a script that writes its own files). |
 | `title` | First non-empty line of the result, stripped of quotes and `#`, at most 80 characters. Written to `state/<agent>/<session>/title.txt`. If the event has a `pane`, also `herdr pane report-metadata <pane> --source agent-sidecar --title <title>` (`$HERDR_BIN_PATH` or `herdr`). An adapter that can set its own terminal title watches `title.txt` and applies it (Pi does). An empty title writes nothing. |
-| `{ file: <template> }` | Appends `## <ISO time> · <item> · <agent> <session> · turns <from+1>–<to>`, a blank line and the result. An empty result appends nothing (so a knowledge item can answer with nothing). |
+| `{ file: <template>, mode: "append" }` | Appends `## <ISO time> · <item> · <agent> <session> · turns <from+1>–<to>`, a blank line and the result. An empty result appends nothing (so a knowledge item can answer with nothing). |
+| `{ file: <template>, mode: "replace" }` | Atomically replaces the file with the trimmed result and a trailing newline. An empty result leaves the existing file unchanged. Useful for current-state snapshots such as `summary.md`. |
 
 Path template placeholders: `{agent}`, `{session}`, `{item}`, `{date}` (local `YYYY-MM-DD`). Any other `{…}` is an error. `~/` expands to `$HOME`; relative paths are relative to the storage root. `{agent}` and `{session}` are made safe for one path segment.
+
+### 5.1 Execution semantics
+
+Scheduled item execution is **at-least-once**, not exactly-once. The output is written before the successful `completedThrough` checkpoint is committed, so a process crash in between can cause the same turn range to run again on a later event. `replace` output is generally safe for this retry because it rewrites the snapshot; `append` output can produce duplicate records and should be used only when that trade-off is acceptable. The v1 implementation intentionally has no transaction, deduplication or queue mechanism for this small crash window.
 
 ## 6. Storage
 
@@ -204,15 +231,17 @@ One tree for every agent. Root: `$AGENT_SIDECAR_HOME`, default `~/.agent-sidecar
 `state.json`:
 
 ```json
-{ "v": 1, "items": { "summary": { "lastTurn": 6,
+{ "v": 1, "items": { "summary": { "lastTurn": 6, "scheduledThrough": 6, "completedThrough": 6,
     "running": { "job": "1791…-a1b2c3", "pid": 4242, "since": "2026-10-09T10:00:00.000Z" },
     "lastRun": { "at": "…", "status": "ok", "fromTurn": 3, "toTurn": 6 } } } }
 ```
 
-- `lastTurn` is the item's cursor: the turn its last scheduled run covered up to. It moves when the run is **scheduled**, not when it succeeds; failed runs are not retried.
+- `scheduledThrough` is the furthest turn reserved by a job; it prevents duplicate scheduling while the job is live.
+- `completedThrough` is the furthest turn processed successfully and is the permanent delta checkpoint. Failed runs leave it unchanged and can be retried by a later event.
+- `lastTurn` mirrors `completedThrough` for compatibility with v1 state files. Old state containing only `lastTurn` is migrated as an already-completed cursor.
 - `running` is set while a job for the item is pending or running. Another event skips the item until it is cleared, unless it is stale: the recorded pid is dead, or it is older than 30 minutes.
-- If `turn` is ever lower than `lastTurn` (Pi `/tree` or a shorter branch), `lastTurn` is reset to `turn`.
-- The lock is a file created with `O_EXCL` holding the owner's pid. It is taken over when that pid is dead or the file is older than 30 s; waiting for it gives up after 10 s.
+- If `turn` is ever lower than `completedThrough` (Pi `/tree` or a shorter branch), the completion cursor is reset to `turn`.
+- The lock is a file created with `O_EXCL` holding the owner's pid. It is taken over when that pid is dead; malformed lock files may be taken over after 30 s, while a live owner's lock is never stolen solely because it is old. Waiting for it gives up after 10 s.
 
 `runs.jsonl` lines: `{ at, job, item, fromTurn, toTurn, status: "ok"|"error", runner?, effort?, model?, written?, warnings?, error?, ms }`.
 

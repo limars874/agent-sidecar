@@ -1,10 +1,19 @@
-# Appends a short record of what happened since the last summary.
+# Maintain a compact current-state snapshot, not a chronological activity log.
 everyTurns: 3
+context:
+  scope: delta
+  include: [user, assistant, toolCall]
+  files:
+    - "out/{agent}/{session}/summary.md"
+  maxChars: 30000
 output:
   file: out/{agent}/{session}/summary.md
+  mode: replace
 prompt: |
-  Summarize the part of a coding session below (turns {{fromTurn}}+1 to {{toTurn}}) as 3–6 bullets:
-  what was done, which files changed, decisions taken, and what is still open.
-  Use only facts from the transcript. Reply with the bullets only.
+  Maintain the current state of this coding session.
+  Use the existing snapshot and the new transcript below to produce a complete replacement snapshot.
+  Include only current work, decisions, changed files, verified results, and open issues.
+  Do not write a chronological log or repeat background that is already clear.
+  Use at most 5 concise bullets or sections. Reply with the complete snapshot only.
 
   {{transcript}}

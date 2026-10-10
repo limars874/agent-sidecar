@@ -1,7 +1,8 @@
 // 基于 transcript 的区间运行一个 item：prompt 交给注入的 model runner，script 直接执行，最后处理输出。
+import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { applyOutput } from './outputs.js';
-import { renderTranscript, sliceTurns } from './transcript.js';
+import { applyOutput, expandPathTemplate } from './outputs.js';
+import { formatTranscriptBlocks, renderBlocks, sliceTurns } from './transcript.js';
 
 // 模型优先级：item model → global model → 当前 session model。
 export function resolveModel(item, config, event) {
@@ -11,6 +12,12 @@ export function resolveModel(item, config, event) {
 // effort 优先级：item effort → global effort；没有显式配置时交给 runner 处理默认值。
 export function resolveEffort(item, config) {
   return item.effort ?? config.effort ?? null;
+}
+
+export function resolveContextSpec(item) {
+  if (item.contextSpec) return item.contextSpec;
+  const scope = typeof item.context === 'string' ? item.context : 'delta';
+  return { scope, turns: null, include: null, maxChars: null, files: [] };
 }
 
 export function fillPrompt(prompt, vars) {
@@ -24,9 +31,14 @@ export function runItem(ctx) {
   const { item, runner, transcript, event, config, fromTurn, toTurn } = ctx;
   const model = resolveModel(item, config, event);
   const effort = resolveEffort(item, config);
-  const rendered = renderTranscript(sliceTurns(transcript.messages, fromTurn, toTurn), {
-    maxChars: config.maxTranscriptChars,
-    toolResultLines: config.toolResultLines,
+  const rendered = renderContext(item, transcript.messages, {
+    root: ctx.root,
+    event,
+    now: ctx.now,
+    env: ctx.env,
+    fromTurn,
+    toTurn,
+    config,
   });
   const vars = {
     transcript: rendered,
@@ -54,6 +66,64 @@ export function runItem(ctx) {
   if (ctx.dryRun) return { model, effort, prompt: `$ ${item.script}\n<stdin>\n${input}` };
   const text = runScript(item, input, config.timeoutMs, ctx.env);
   return { model, effort, text, output: applyOutput(item.output, text, ctx) };
+}
+
+export function renderContext(item, messages, { root, event, now, env, fromTurn, toTurn, config }) {
+  const spec = resolveContextSpec(item);
+  const range = contextRange(spec, fromTurn, toTurn);
+  const transcriptBlocks = formatTranscriptBlocks(
+    sliceTurns(messages, range.fromTurn, range.toTurn),
+    { include: spec.include, toolResultLines: config.toolResultLines },
+  );
+  const fileBlocks = readContextFiles(spec.files, { root, event, item, now, env });
+  const maxChars = spec.maxChars ?? config.maxTranscriptChars;
+  const fileText = renderContextFiles(fileBlocks, maxChars);
+  const separator = fileText && transcriptBlocks.length > 0 ? 2 : 0;
+  const transcriptBudget = Math.max(0, maxChars - fileText.length - separator);
+  const transcriptText = transcriptBudget > 0 ? renderBlocks(transcriptBlocks, transcriptBudget) : '';
+  return [fileText, transcriptText].filter(Boolean).join('\n\n');
+}
+
+function renderContextFiles(blocks, maxChars) {
+  if (blocks.length === 0 || maxChars < 1) return '';
+  let remaining = maxChars;
+  const rendered = [];
+  const marker = '… [file content truncated]';
+
+  for (const block of blocks) {
+    const separator = rendered.length > 0 ? 2 : 0;
+    const available = remaining - separator;
+    if (available <= 0) break;
+    if (block.length <= available) {
+      rendered.push(block);
+      remaining -= separator + block.length;
+      continue;
+    }
+    const content = available <= marker.length
+      ? block.slice(0, available)
+      : `${block.slice(0, available - marker.length)}${marker}`;
+    rendered.push(content);
+    break;
+  }
+  return rendered.join('\n\n');
+}
+
+function contextRange(spec, fromTurn, toTurn) {
+  if (spec.scope === 'session') return { fromTurn: 0, toTurn };
+  if (spec.scope === 'recent') return { fromTurn: Math.max(0, toTurn - spec.turns), toTurn };
+  return { fromTurn, toTurn };
+}
+
+function readContextFiles(files, ctx) {
+  return files.flatMap((template) => {
+    const file = expandPathTemplate(template, ctx);
+    try {
+      return [`[file ${template}]\n${fs.readFileSync(file, 'utf8')}`];
+    } catch (err) {
+      if (err.code === 'ENOENT') return [];
+      throw new Error(`context file ${file}: ${err.message}`);
+    }
+  });
 }
 
 function runScript(item, input, timeoutMs, env) {
