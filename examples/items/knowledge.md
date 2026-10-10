@@ -5,7 +5,7 @@ context:
   include: [user, assistant, toolResult]
   maxChars: 20000
 output:
-  file: out/{agent}/{session}/knowledge.md
+  file: out/{agent}/{sessionMonth}/{session}/knowledge.md
   mode: append
 ---
 From the new session delta below, extract only reusable facts about tools, environments, APIs, or pitfalls that were verified in the transcript.

@@ -8,7 +8,9 @@ import { ADAPTERS, getAdapter } from '../adapters/index.js';
 import { loadConfig } from '../core/config.js';
 import { validateEvent } from '../core/event.js';
 import { loadItems } from '../core/items.js';
+import { ensureSessionMetadata } from '../core/outputs.js';
 import { BIN_PATH, itemsDir, sessionDir } from '../core/paths.js';
+import { getSessionContext } from '../core/session.js';
 import { runItem } from '../core/runner.js';
 import { planEvent } from '../core/scheduler.js';
 import { getRunner, resolveRunnerName } from '../runners/index.js';
@@ -70,11 +72,18 @@ export function work(jobFile, { root, env }) {
   });
 
   const results = [];
-  let config, items, transcript, setupError;
+  let config, items, transcript, sessionContext, setupError;
   try {
     config = loadConfig(root);
     items = loadItemsLogged(root, dir);
     transcript = getAdapter(event.agent).readTranscript(event.transcriptRef);
+    sessionContext = getSessionContext(transcript, event);
+    try {
+      const metadata = ensureSessionMetadata({ root, event, sessionContext });
+      if (metadata.warning) log(dir, metadata.warning);
+    } catch (err) {
+      log(dir, `session metadata failed: ${err.message}`);
+    }
   } catch (err) {
     setupError = err.message;
   }
@@ -100,6 +109,7 @@ export function work(jobFile, { root, env }) {
         toTurn: d.toTurn,
         env,
         now: new Date(),
+        sessionContext,
       });
       Object.assign(record, { status: 'ok', runner: runnerName, model: r.model, effort: r.effort, written: r.output.written, warnings: r.output.warnings });
       for (const w of r.output.warnings) log(dir, `${d.name}: ${w}`);
@@ -146,15 +156,20 @@ export function runManual({ name, agent, sessionFile, model, pane, fromTurn, toT
     Object.keys(ADAPTERS),
   );
   const dir = sessionDir(root, agent, event.session);
+  const sessionContext = getSessionContext(transcript, event);
   const cursor = readState(dir).items[name]?.lastTurn ?? 0;
   const to = toTurn ?? turns;
   const from = fromTurn ?? (item.context === 'session' ? 0 : Math.min(cursor, to));
   if (from < 0 || to < from || to > turns) throw new Error(`invalid turn range ${from}..${to} (session has ${turns} turns)`);
+  if (!dryRun) {
+    const metadata = ensureSessionMetadata({ root, event, sessionContext });
+    if (metadata.warning) log(dir, metadata.warning);
+  }
 
   const runnerName = resolveRunnerName(item, config);
   const runner = getRunner(runnerName);
   const r = runItem({
-    item, runner, transcript, event, config, root, sessionDir: dir, fromTurn: from, toTurn: to, env, now: new Date(), dryRun,
+    item, runner, transcript, event, config, root, sessionDir: dir, fromTurn: from, toTurn: to, env, now: new Date(), dryRun, sessionContext,
   });
   return { item: name, runner: runnerName, model: r.model, effort: r.effort, fromTurn: from, toTurn: to, ...(dryRun ? { prompt: r.prompt } : { text: r.text, output: r.output }) };
 }

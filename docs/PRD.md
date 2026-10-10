@@ -41,6 +41,8 @@ One developer running agent sessions (initially Pi) in terminals or Herdr panes,
 | R17 | Distinguish scheduled work from successfully completed work. | `scheduledThrough` prevents duplicate scheduling; `completedThrough` advances only after success. |
 | R18 | Support both activity logs and current-state files. | File output defaults to `append`; `mode: replace` atomically replaces a snapshot. |
 | R19 | Make scheduled execution semantics explicit. | At-least-once delivery: replace snapshots are usually repeat-safe; append logs may duplicate after a crash window. |
+| R20 | Group session outputs by the original creation month. | `{sessionMonth}` is derived from the session header timestamp in UTC and remains stable across retries and later writes. |
+| R21 | Record stable session metadata once. | Canonical `out/{agent}/{sessionMonth}/{session}/metadata.json`, created exclusively and never overwritten. |
 
 ## Non-goals (v1)
 
@@ -48,7 +50,7 @@ One developer running agent sessions (initially Pi) in terminals or Herdr panes,
 - Writing directly into a knowledge base: knowledge output is candidates in files, reviewed by a person.
 - Running items at session end, on compaction, or on a timer; only every N turns.
 - A per-project items directory; there is one global directory.
-- Exactly-once delivery, transactional output, retry backoff, attempt limits, a daemon, or a UI beyond titles.
+- Exactly-once delivery, transactional output, automatic migration of old output paths, retry backoff, attempt limits, a daemon, or a UI beyond titles.
 
 ## Success criteria
 

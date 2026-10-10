@@ -1,6 +1,6 @@
 # agent-sidecar
 
-Runs configurable side work alongside AI coding agent sessions: every few turns it can retitle the terminal or Herdr pane, append a summary of what was done, or collect knowledge candidates, usually on a cheaper model than the session's. What runs is defined by **items**: Markdown, YAML or JSON files in one directory.
+Runs configurable side work alongside AI coding agent sessions: every few turns it can retitle the terminal or Herdr pane, maintain a summary of what was done, or collect knowledge candidates, usually on a cheaper model than the session's. What runs is defined by **items**: Markdown, YAML or JSON files in one directory.
 
 ```
 Pi (extension) ──event──► agent-sidecar event ──detached──► agent-sidecar work ──► selected runner (default: pi -p) / script
@@ -81,10 +81,10 @@ context:
   scope: delta
   include: [user, assistant, toolCall]
   files:
-    - "out/{agent}/{session}/summary.md"
+    - "out/{agent}/{sessionMonth}/{session}/summary.md"
   maxChars: 30000
 output:
-  file: out/{agent}/{session}/summary.md
+  file: out/{agent}/{sessionMonth}/{session}/summary.md
   mode: replace                       # current snapshot; use append for an activity log
 prompt: |
   Maintain the complete current session summary using the existing snapshot and this delta.
@@ -110,7 +110,7 @@ Shipped examples (`examples/items/`): `title.md` (pane title), `summary.yaml` (c
 
 Runner choice per item: item `runner` → config `runner` → `pi` (the default runner). The runner is independent from the agent adapter: the Pi adapter reads the session transcript, while the selected runner performs the side work.
 
-Context can be a legacy `delta`/`session` string or a mapping with `scope`, `turns`, `include`, `maxChars` and optional `files`. Existing context files consume the budget first, then the newest transcript uses the remainder; a single oversized file may be truncated, but a long delta cannot make the prior snapshot disappear. Use `output.mode: replace` for a current-state snapshot such as `summary.md`; the default file mode remains `append` for activity logs and knowledge candidates.
+Context can be a legacy `delta`/`session` string or a mapping with `scope`, `turns`, `include`, `maxChars` and optional `files`. Existing context files consume the budget first, then the newest transcript uses the remainder; a single oversized file may be truncated, but a long delta cannot make the prior snapshot disappear. Path templates also support `{sessionMonth}` (UTC `YYYY-MM` from the original session creation time). Use `output.mode: replace` for a current-state snapshot such as `summary.md`; the default file mode remains `append` for activity logs and knowledge candidates.
 
 Scheduled work is at-least-once: a crash after output is written but before the completion checkpoint can repeat a range. `replace` snapshots usually tolerate this; `append` outputs may contain duplicate records.
 
@@ -146,11 +146,13 @@ echo '{"v":1,"agent":"pi","session":"…","transcriptRef":"….jsonl","turn":4}'
 ```
 ~/.agent-sidecar/
   items/  config.yaml
-  out/pi/<session>/summary.md, knowledge.md          (example items' outputs)
+  out/pi/<sessionMonth>/<session>/
+      metadata.json, summary.md, knowledge.md         (month-based example outputs)
+  out/pi/<session>/…                                 (legacy/custom outputs remain valid)
   state/pi/<session>/title.txt, runs.jsonl, sidecar.log, state.json
 ```
 
-When an item does not seem to run, check `agent-sidecar items`, then `state/pi/<session>/sidecar.log` and `runs.jsonl`.
+When an item does not seem to run, check `agent-sidecar items`, then `state/pi/<session>/sidecar.log` and `runs.jsonl`. Switching an item to `{sessionMonth}` does not migrate or read its old output path; old files remain in place for manual migration if needed.
 
 ## Tests
 

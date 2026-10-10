@@ -40,17 +40,21 @@
 
 **D19 — Scheduled execution is at-least-once.** Output is written before the successful completion checkpoint, so a crash in that small window can repeat a turn range. `replace` snapshots normally tolerate the repeat; `append` logs may duplicate records. Do not add transactions or general deduplication until real usage justifies their complexity.
 
+**D20 — Session output grouping uses the original UTC creation month.** `{sessionMonth}` comes from the agent session header, not sidecar processing time, and remains stable across retries and month boundaries. The canonical metadata file is fully prepared in a temporary file and published with exclusive creation; existing metadata is validated and never overwritten. Legacy/custom paths remain compatible and are not auto-migrated.
+
 ## Known limitations
 
 - **Only Pi adapter.** No Claude Code, Codex or other agent adapter exists yet. Runners currently include `pi` and `jcode`.
 - **Jcode effort is configuration-scoped.** The installed Jcode CLI has no per-call effort flag, so sidecar `effort` does not override `~/.jcode/config.toml` for Jcode runs.
 - **No run at session end.** Up to `everyTurns − 1` final turns of a session are never processed automatically. Use `agent-sidecar run` to catch up.
 - **Active branch = last entry in the file.** Same rule as Pi's own loader. If a user moves around the tree with `/tree` without adding a message, the CLI still reads the branch of the last written entry.
+- **Creation time is required only for new month-based paths.** A missing or invalid session header timestamp is logged and leaves legacy paths usable, but prevents `{sessionMonth}` expansion and canonical metadata creation.
 - **Transcript coverage.** Only user, assistant text, tool calls and tool results are read. Pi's other message kinds (user `!bash` executions, extension messages, compaction and branch summaries) are not part of the transcript.
 - **Herdr title semantics unverified live.** The call follows `herdr pane report-metadata --help` (Herdr 0.9.1). Whether Herdr shows a display title from the `agent-sidecar` source alongside its own Pi integration has not been checked in a live session. Failures are logged as warnings.
 - **Title only for Pi's own terminal and Herdr.** Outside Herdr, a future hook-only adapter cannot set the terminal title.
 - **Prompts leave the machine.** `{{transcript}}` is sent to whichever provider the chosen model belongs to.
 - **Cost control is by configuration only**: `everyTurns`, model choice, per-item `context.maxChars` and global `maxTranscriptChars`. There is no token or spend budget limit.
+- **No automatic output migration.** Switching an item to `{sessionMonth}` leaves its old output in place and starts a new path; manual migration is intentionally outside v1.
 - **Process cost.** Each finished turn starts one short Node process; each due prompt item one selected runner process (the v1 default is `pi -p`).
 - **Retries have no backoff or attempt cap.** A failed item remains due and retries on a later event; a worker killed mid-run is noticed only by pid/age (30 min). Duplicate side effects are still the responsibility of the item's output/runner design.
 - **Script items are trusted code.** They run with the user's environment and permissions, like any file the user places in `items/`.

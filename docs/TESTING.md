@@ -12,9 +12,9 @@ No network, Pi, Jcode or Herdr is needed. `tests/fixtures/fake-pi.js` stands in 
 | File | Covers |
 |---|---|
 | `tests/items.test.js` | Markdown / YAML / JSON items, runner/effort/context fields, append/replace output modes, defaults, validation errors, skipping bad and duplicate files, global config |
-| `tests/core.test.js` | Scheduler (due, idempotent, running, stale, shorter branch, success checkpoint), structured transcript projection / role filtering / budgets, event validation, runner/model/effort priority, Pi/Jcode model normalization, injected runner execution, context files, prompt filling, title cleaning, append/replace outputs, path templates, cross-process lock and stale-lock takeover, run staleness |
-| `tests/pi-adapter.test.js` | Pi JSONL reader (active branch only, structured roles, images, partial last line, missing header), default Pi runner `pi -p` arguments/effort mapping and guard, extension event building, child guard, extension → CLI → worker → runner end to end, title file → `ctx.ui.setTitle` |
-| `tests/cli.test.js` | `event --foreground` with title + file outputs, Herdr call, scheduled/completed cursors, retry after failure, job cleanup, idempotence; replace snapshot repetition and append duplicate semantics; session-model fallback; Pi and Jcode runners; effort forwarding; "no model"; detached `event`; invalid input exit codes; script items; `run` and `--dry-run`; `items`; shipped examples |
+| `tests/core.test.js` | Scheduler (due, idempotent, running, stale, shorter branch, success checkpoint), structured transcript projection / role filtering / budgets, session timestamp normalization/month derivation, metadata idempotence, event validation, runner/model/effort priority, Pi/Jcode model normalization, injected runner execution, context files, prompt filling, title cleaning, append/replace outputs, path templates, cross-process lock and stale-lock takeover, run staleness |
+| `tests/pi-adapter.test.js` | Pi JSONL reader (active branch only, structured roles, images, creation time, invalid time, partial last line, missing header), default Pi runner `pi -p` arguments/effort mapping and guard, extension event building, child guard, extension → CLI → worker → runner end to end, title file → `ctx.ui.setTitle` |
+| `tests/cli.test.js` | `event --foreground` with title + file outputs, Herdr call, scheduled/completed cursors, retry after failure, job cleanup, idempotence; replace snapshot repetition and append duplicate semantics; month-based outputs/metadata and legacy-path behavior; session-model fallback; Pi and Jcode runners; effort forwarding; "no model"; detached `event`; invalid input exit codes; script items; `run` and `--dry-run`; `items`; shipped examples |
 
 `tests/fixtures/pi-session.jsonl` is a Pi v3 session with an abandoned branch, tool calls, an image and a half-written last line.
 
@@ -40,7 +40,7 @@ context:
   include: [user, assistant]
   maxChars: 12000
 output:
-  file: out/{agent}/{session}/summary.md
+  file: out/{agent}/{sessionMonth}/{session}/summary.md
   mode: replace
 prompt: Summarize the conversation below in 2 bullets.
 EOF
@@ -48,7 +48,7 @@ EOF
 SESS=$(mktemp -d)
 pi -p --session-dir "$SESS" -e "$PWD/adapters/pi/extension.js" "Say hello in one word."
 sleep 30   # side work runs detached
-cat $AGENT_SIDECAR_HOME/state/pi/*/runs.jsonl $AGENT_SIDECAR_HOME/state/pi/*/title.txt $AGENT_SIDECAR_HOME/out/pi/*/summary.md
+cat $AGENT_SIDECAR_HOME/state/pi/*/runs.jsonl $AGENT_SIDECAR_HOME/state/pi/*/title.txt $AGENT_SIDECAR_HOME/out/pi/*/*/metadata.json $AGENT_SIDECAR_HOME/out/pi/*/*/summary.md
 ```
 
 Expected: two `"status":"ok"` runs whose `model` is the session's model, a title, and a summary. In print mode the extension has no UI, so the terminal title is not set; in an interactive `pi` inside Herdr, the pane title should change after the first turn.

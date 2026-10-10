@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { applyOutput, expandPathTemplate } from './outputs.js';
+import { getSessionContext } from './session.js';
 import { formatTranscriptBlocks, renderBlocks, sliceTurns } from './transcript.js';
 
 // 模型优先级：item model → global model → 当前 session model。
@@ -25,10 +26,11 @@ export function fillPrompt(prompt, vars) {
   return prompt.includes('{{transcript}}') ? filled : `${filled}\n\n<transcript>\n${vars.transcript}\n</transcript>`;
 }
 
-// ctx: { item, runner, transcript, event, config, root, sessionDir, fromTurn, toTurn, env, now, dryRun }
+// ctx: { item, runner, transcript, event, config, root, sessionDir, fromTurn, toTurn, env, now, dryRun, sessionContext }
 // 返回 { model, prompt?, text?, output? }。
 export function runItem(ctx) {
   const { item, runner, transcript, event, config, fromTurn, toTurn } = ctx;
+  const sessionContext = ctx.sessionContext ?? getSessionContext(transcript, event);
   const model = resolveModel(item, config, event);
   const effort = resolveEffort(item, config);
   const rendered = renderContext(item, transcript.messages, {
@@ -39,6 +41,7 @@ export function runItem(ctx) {
     fromTurn,
     toTurn,
     config,
+    sessionContext,
   });
   const vars = {
     transcript: rendered,
@@ -59,23 +62,23 @@ export function runItem(ctx) {
     if (ctx.dryRun) return { model, effort, prompt };
     if (!runner || typeof runner.callModel !== 'function') throw new Error('no model runner configured');
     const text = runner.callModel({ model, effort, prompt, timeoutMs: config.timeoutMs, env: ctx.env });
-    return { model, effort, text, output: applyOutput(item.output, text, ctx) };
+    return { model, effort, text, output: applyOutput(item.output, text, { ...ctx, sessionContext }) };
   }
 
   const input = JSON.stringify({ ...vars, model, event, root: ctx.root });
   if (ctx.dryRun) return { model, effort, prompt: `$ ${item.script}\n<stdin>\n${input}` };
   const text = runScript(item, input, config.timeoutMs, ctx.env);
-  return { model, effort, text, output: applyOutput(item.output, text, ctx) };
+  return { model, effort, text, output: applyOutput(item.output, text, { ...ctx, sessionContext }) };
 }
 
-export function renderContext(item, messages, { root, event, now, env, fromTurn, toTurn, config }) {
+export function renderContext(item, messages, { root, event, now, env, fromTurn, toTurn, config, sessionContext }) {
   const spec = resolveContextSpec(item);
   const range = contextRange(spec, fromTurn, toTurn);
   const transcriptBlocks = formatTranscriptBlocks(
     sliceTurns(messages, range.fromTurn, range.toTurn),
     { include: spec.include, toolResultLines: config.toolResultLines },
   );
-  const fileBlocks = readContextFiles(spec.files, { root, event, item, now, env });
+  const fileBlocks = readContextFiles(spec.files, { root, event, item, now, env, sessionContext });
   const maxChars = spec.maxChars ?? config.maxTranscriptChars;
   const fileText = renderContextFiles(fileBlocks, maxChars);
   const separator = fileText && transcriptBlocks.length > 0 ? 2 : 0;

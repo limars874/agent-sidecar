@@ -4,10 +4,10 @@ context:
   scope: delta
   include: [user, assistant, toolCall]
   files:
-    - "out/{agent}/{session}/summary.md"
+    - "out/{agent}/{sessionMonth}/{session}/summary.md"
   maxChars: 30000
 output:
-  file: out/{agent}/{session}/summary.md
+  file: out/{agent}/{sessionMonth}/{session}/summary.md
   mode: replace
 prompt: |
   Maintain the current state of this coding session.
