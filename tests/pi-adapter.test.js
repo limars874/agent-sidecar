@@ -13,6 +13,8 @@ test('Pi session: active branch only, roles mapped, partial last line ignored', 
   assert.equal(t.session, PI_SESSION_ID);
   assert.equal(t.cwd, '/work/demo');
   assert.equal(t.model, 'anthropic/m', 'latest assistant reply on the branch');
+  assert.equal(t.createdAt, '2026-10-09T10:00:00.000Z');
+  assert.equal(t.createdAtError, null);
   assert.deepEqual(t.messages, [
     { role: 'user', text: 'List the files' },
     { role: 'assistant', text: 'Listing.' },
@@ -41,6 +43,16 @@ test('Pi session: a file without a header is rejected', (t) => {
   const file = path.join(box.dir, 'x.jsonl');
   fs.writeFileSync(file, '{"type":"message","id":"a","parentId":null}\n');
   assert.throws(() => readPiSession(file), /not a Pi session/);
+});
+
+test('Pi session: invalid creation time is visible without breaking transcript reading', (t) => {
+  const box = sandbox(t);
+  const file = path.join(box.dir, 'invalid-time.jsonl');
+  fs.writeFileSync(file, '{"type":"session","version":3,"id":"bad-time","timestamp":"not-a-time","cwd":"/tmp"}\n');
+  const transcript = readPiSession(file);
+  assert.equal(transcript.createdAt, null);
+  assert.match(transcript.createdAtError, /RFC 3339/);
+  assert.equal(transcript.session, 'bad-time');
 });
 
 test('pi -p call: bare child, prompt on stdin, model passed, guard env set', (t) => {

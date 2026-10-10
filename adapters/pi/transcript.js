@@ -3,6 +3,7 @@
 // active branch ends at the last entry in the file and follows parentId to
 // the root; abandoned branches are left out.
 import fs from 'node:fs';
+import { normalizeCreatedAt } from '../../core/session.js';
 
 const TOOL_ARGS_MAX = 300;
 
@@ -29,6 +30,14 @@ export function readPiSession(file) {
   }
   if (!header) throw new Error(`${file}: not a Pi session (no session header)`);
 
+  let createdAt = null;
+  let createdAtError = null;
+  try {
+    createdAt = normalizeCreatedAt(header.timestamp, `${file}: session header timestamp`);
+  } catch (err) {
+    createdAtError = err.message;
+  }
+
   const branch = [];
   const seen = new Set();
   for (let id = leafId; id && byId.has(id) && !seen.has(id); id = byId.get(id).parentId) {
@@ -41,6 +50,8 @@ export function readPiSession(file) {
     session: header.id,
     cwd: header.cwd ?? null,
     model: lastModel(branch),
+    createdAt,
+    createdAtError,
     messages: branch.filter((e) => e.type === 'message').flatMap((e) => toMessages(e.message)),
   };
 }

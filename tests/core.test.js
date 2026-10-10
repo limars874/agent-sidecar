@@ -5,9 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { validateEvent } from '../core/event.js';
-import { applyOutput, cleanTitle, expandPathTemplate } from '../core/outputs.js';
-import { safeSegment } from '../core/paths.js';
+import { applyOutput, cleanTitle, ensureSessionMetadata, expandPathTemplate } from '../core/outputs.js';
+import { safeSegment, sessionOutputDir } from '../core/paths.js';
 import { fillPrompt, renderContext, resolveEffort, resolveModel, runItem } from '../core/runner.js';
+import { getSessionContext, normalizeCreatedAt } from '../core/session.js';
 import { emptyState, planEvent } from '../core/scheduler.js';
 import { readState, runIsStale, updateState, withLock } from '../core/state.js';
 import { countTurns, renderTranscript, sliceTurns } from '../core/transcript.js';
@@ -250,6 +251,86 @@ test('outputs: title cleaning and path templates', () => {
   assert.equal(expandPathTemplate('~/notes/{date}.md', ctx), '/h/notes/2026-10-09.md');
   assert.throws(() => expandPathTemplate('{cwd}.md', ctx), /unknown placeholder/);
   assert.equal(safeSegment('..'), '_..');
+});
+
+test('session context normalizes creation time and derives a stable UTC month', () => {
+  assert.equal(normalizeCreatedAt('2026-10-31T23:30:00.000Z'), '2026-10-31T23:30:00.000Z');
+  assert.equal(normalizeCreatedAt('2026-10-31T23:30:00-04:00'), '2026-11-01T03:30:00.000Z');
+  assert.throws(() => normalizeCreatedAt('2026-02-30T00:00:00Z'), /valid date-time/);
+  assert.throws(() => normalizeCreatedAt('2026-10-31'), /RFC 3339/);
+
+  const context = getSessionContext(
+    { createdAt: '2026-10-31T23:30:00.000Z' },
+    { agent: 'pi', session: 'a/b' },
+  );
+  assert.deepEqual(context, {
+    agent: 'pi',
+    sessionId: 'a/b',
+    createdAt: '2026-10-31T23:30:00.000Z',
+    sessionMonth: '2026-10',
+    createdAtError: null,
+  });
+  assert.equal(sessionOutputDir('/r', 'pi', context.sessionMonth, 'a/b'), '/r/out/pi/2026-10/a_b');
+});
+
+test('sessionMonth paths fail visibly without creation metadata', () => {
+  const base = { root: '/r', env: { HOME: '/h' }, now: new Date('2026-10-09T00:00:00Z'), item: { name: 'sum' }, event: { agent: 'pi', session: 's' } };
+  assert.equal(
+    expandPathTemplate('out/{agent}/{sessionMonth}/{session}.md', { ...base, sessionContext: { sessionMonth: '2026-10' } }),
+    '/r/out/pi/2026-10/s.md',
+  );
+  assert.throws(
+    () => expandPathTemplate('out/{agent}/{sessionMonth}/{session}.md', { ...base, sessionContext: { createdAtError: 'missing timestamp' } }),
+    /sessionMonth unavailable: missing timestamp/,
+  );
+});
+
+test('session metadata is created once in the canonical month directory', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'metadata-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const event = { agent: 'pi', session: 'a/b' };
+  const sessionContext = { createdAt: '2026-10-31T23:30:00.000Z', sessionMonth: '2026-10', createdAtError: null };
+  const first = ensureSessionMetadata({ root, event, sessionContext });
+  assert.equal(first.written, path.join(root, 'out', 'pi', '2026-10', 'a_b', 'metadata.json'));
+  assert.equal(first.warning, null);
+  const file = first.written;
+  const original = fs.readFileSync(file, 'utf8');
+  assert.deepEqual(JSON.parse(original), { sessionId: 'a/b', agent: 'pi', createdAt: sessionContext.createdAt });
+
+  fs.writeFileSync(file, '{"keep":true}\n');
+  const second = ensureSessionMetadata({ root, event, sessionContext });
+  assert.equal(second.written, file);
+  assert.equal(fs.readFileSync(file, 'utf8'), '{"keep":true}\n');
+});
+
+test('session metadata creation is safe when two workers race', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'metadata-race-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const moduleRoot = path.resolve(import.meta.dirname, '..');
+  const code = `import { ensureSessionMetadata } from './core/outputs.js';
+const result = ensureSessionMetadata({
+  root: ${JSON.stringify(root)},
+  event: { agent: 'pi', session: 'race/session' },
+  sessionContext: { createdAt: '2026-10-10T13:35:00.000Z', sessionMonth: '2026-10', createdAtError: null },
+});
+console.log(JSON.stringify(result));`;
+  const run = () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', code], { cwd: moduleRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('close', (status) => status === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(stderr)));
+  });
+  const [first, second] = await Promise.all([run(), run()]);
+  assert.equal(first.warning, null);
+  assert.equal(second.warning, null);
+  const file = path.join(root, 'out', 'pi', '2026-10', 'race_session', 'metadata.json');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {
+    sessionId: 'race/session',
+    agent: 'pi',
+    createdAt: '2026-10-10T13:35:00.000Z',
+  });
 });
 
 test('outputs: replace mode atomically replaces a file while append remains a log', () => {

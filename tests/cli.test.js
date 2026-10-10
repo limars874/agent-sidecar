@@ -65,6 +65,28 @@ test('summary snapshot replaces the previous file and feeds it into the next del
   assert.equal(fs.readFileSync(file, 'utf8'), 'snapshot two\n');
 });
 
+test('sessionMonth output and metadata stay stable across repeated events', (t) => {
+  const box = sandbox(t);
+  box.item('summary.yaml', 'everyTurns: 1\ncontext:\n  scope: delta\n  files:\n    - "out/{agent}/{sessionMonth}/{session}/summary.md"\noutput:\n  file: out/{agent}/{sessionMonth}/{session}/summary.md\n  mode: replace\nprompt: Summarize');
+  const first = cli(['event', '--foreground', '--json', JSON.stringify(event({ turn: 2 }))], { ...box.env, FAKE_PI_REPLY: 'first snapshot' });
+  assert.equal(first.code, 0, first.stderr);
+  const dir = path.join(box.root, 'out', 'pi', '2026-10', PI_SESSION_ID);
+  const metadata = path.join(dir, 'metadata.json');
+  const summary = path.join(dir, 'summary.md');
+  assert.deepEqual(JSON.parse(fs.readFileSync(metadata, 'utf8')), {
+    sessionId: PI_SESSION_ID,
+    agent: 'pi',
+    createdAt: '2026-10-09T10:00:00.000Z',
+  });
+  assert.equal(fs.readFileSync(summary, 'utf8'), 'first snapshot\n');
+
+  fs.writeFileSync(metadata, '{"keep":true}\n');
+  const second = cli(['event', '--foreground', '--json', JSON.stringify(event({ turn: 3 }))], { ...box.env, FAKE_PI_REPLY: 'second snapshot' });
+  assert.equal(second.code, 0, second.stderr);
+  assert.equal(fs.readFileSync(metadata, 'utf8'), '{"keep":true}\n');
+  assert.equal(fs.readFileSync(summary, 'utf8'), 'second snapshot\n');
+});
+
 test('append output may duplicate records when a run is repeated', (t) => {
   const box = sandbox(t);
   box.item('log.yaml', 'everyTurns: 1\noutput:\n  file: out/log.md\nprompt: Log');
@@ -100,6 +122,24 @@ test('event: session model is the fallback; failures are recorded, not fatal', (
   const retriedState = JSON.parse(fs.readFileSync(path.join(box.stateDir(), 'state.json'), 'utf8'));
   assert.equal(retriedState.items.note.lastTurn, 2);
   assert.equal(retriedState.items.note.completedThrough, 2);
+});
+
+test('missing session creation time preserves legacy paths and rejects month paths', (t) => {
+  const box = sandbox(t);
+  const session = path.join(box.dir, 'missing-time.jsonl');
+  fs.writeFileSync(session, '{"type":"session","version":3,"id":"missing-time","cwd":"/tmp"}\n{"type":"message","id":"u","parentId":null,"message":{"role":"user","content":"hello"}}\n');
+  box.item('legacy.yaml', 'everyTurns: 1\nmodel: fake/model\noutput:\n  file: out/legacy.md\nprompt: Legacy');
+  box.item('monthly.yaml', 'everyTurns: 1\nmodel: fake/model\noutput:\n  file: out/{agent}/{sessionMonth}/{session}/new.md\nprompt: Monthly');
+
+  const legacy = cli(['run', 'legacy', '--agent', 'pi', '--session', session], { ...box.env, FAKE_PI_REPLY: 'legacy output' });
+  assert.equal(legacy.code, 0, legacy.stderr);
+  assert.match(fs.readFileSync(path.join(box.root, 'out', 'legacy.md'), 'utf8'), /legacy output/);
+  assert.match(fs.readFileSync(path.join(box.root, 'state', 'pi', 'missing-time', 'sidecar.log'), 'utf8'), /session metadata skipped/);
+
+  const monthly = cli(['run', 'monthly', '--agent', 'pi', '--session', session], { ...box.env, FAKE_PI_REPLY: 'monthly output' });
+  assert.equal(monthly.code, 1);
+  assert.match(monthly.stderr, /sessionMonth unavailable/);
+  assert.equal(fs.existsSync(path.join(box.root, 'out', 'pi', 'missing-time')), false);
 });
 
 test('event: global effort reaches the default Pi runner', (t) => {

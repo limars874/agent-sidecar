@@ -23,3 +23,8 @@ export function safeSegment(value) {
 export function sessionDir(root, agent, session) {
   return path.join(root, 'state', safeSegment(agent), safeSegment(session));
 }
+
+export function sessionOutputDir(root, agent, sessionMonth, session) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(sessionMonth)) throw new Error(`invalid sessionMonth "${sessionMonth}"`);
+  return path.join(root, 'out', safeSegment(agent), sessionMonth, safeSegment(session));
+}

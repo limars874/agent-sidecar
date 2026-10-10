@@ -39,11 +39,12 @@ An adapter is one entry in `adapters/index.js`:
 ```js
 {
   name: 'pi',
-  readTranscript(transcriptRef) → { session, cwd, model, messages: [{ role, text, name? }] },
+  readTranscript(transcriptRef) → { session, cwd, model, createdAt, createdAtError?, messages: [{ role, text, name? }] },
 }
 ```
 
 - `readTranscript` returns the session's **active branch** only, oldest first. `role` is `user`, `assistant`, `toolCall` or `toolResult`. A turn starts at each `user` message. `name` is the tool name for tool messages. Tool calls remain separate from assistant text so an item can filter them; hidden reasoning is left out.
+- `createdAt` is the original session creation time as a normalized UTC ISO 8601 string, read from the agent's session header. `createdAtError` is a diagnostic when the header timestamp is missing or invalid; readers continue to provide the transcript so legacy paths can still run, but `{sessionMonth}` paths and automatic metadata then fail visibly instead of using the current time.
 - `model` is the session's current model as far as the transcript shows it (Pi: the latest model switch or assistant reply on the branch), or null. `agent-sidecar run` uses it as the session model when `--model` is not given.
 - The transcript reader and the adapter's in-agent half stay in the agent-specific boundary; model execution belongs to a runner.
 
@@ -115,10 +116,10 @@ context:
   scope: delta
   include: [user, assistant, toolCall]
   files:
-    - "out/{agent}/{session}/summary.md"
+    - "out/{agent}/{sessionMonth}/{session}/summary.md"
   maxChars: 30000
 output:
-  file: out/{agent}/{session}/summary.md
+  file: out/{agent}/{sessionMonth}/{session}/summary.md
   mode: replace
 prompt: |
   Maintain the complete current summary from the existing snapshot and this delta.
@@ -204,7 +205,15 @@ The lifecycle settings are global behavior, not items: they do not call a model 
 | `{ file: <template>, mode: "append" }` | Appends `## <ISO time> · <item> · <agent> <session> · turns <from+1>–<to>`, a blank line and the result. An empty result appends nothing (so a knowledge item can answer with nothing). |
 | `{ file: <template>, mode: "replace" }` | Atomically replaces the file with the trimmed result and a trailing newline. An empty result leaves the existing file unchanged. Useful for current-state snapshots such as `summary.md`. |
 
-Path template placeholders: `{agent}`, `{session}`, `{item}`, `{date}` (local `YYYY-MM-DD`). Any other `{…}` is an error. `~/` expands to `$HOME`; relative paths are relative to the storage root. `{agent}` and `{session}` are made safe for one path segment.
+Path template placeholders: `{agent}`, `{session}`, `{sessionMonth}` (UTC `YYYY-MM` from the original session creation time), `{item}`, and `{date}` (local `YYYY-MM-DD` at write time). Any other `{…}` is an error. `~/` expands to `$HOME`; relative paths are relative to the storage root. `{agent}` and `{session}` are made safe for one path segment. `{sessionMonth}` is unavailable when the session header has no valid creation time and produces an explicit error.
+
+The sidecar also creates one automatic metadata file at `out/{agent}/{sessionMonth}/{session}/metadata.json` when a normal `work` or non-dry `run` first processes a session. Its minimum content is:
+
+```json
+{"sessionId":"0199a3f2-…","agent":"pi","createdAt":"2026-10-10T13:35:00.000Z"}
+```
+
+The file is created with exclusive creation and is never rewritten by later events. This canonical metadata location is independent of custom item output paths.
 
 ### 5.1 Execution semantics
 
@@ -218,7 +227,10 @@ One tree for every agent. Root: `$AGENT_SIDECAR_HOME`, default `~/.agent-sidecar
 <root>/
   config.yaml                      global config (optional)
   items/                           item definitions
-  out/                             default place for file outputs (by convention: out/<agent>/<session>/…)
+  out/<agent>/<sessionMonth>/<session>/
+    metadata.json                  stable session metadata (when createdAt is valid)
+    summary.md, knowledge.md       example item outputs
+  out/<agent>/<session>/…          legacy/custom output paths remain valid
   state/<agent>/<session>/
     state.json                     cursors and running markers (below)
     lock                           held while state.json is read and written

@@ -4,13 +4,13 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { appendLine } from './state.js';
-import { safeSegment } from './paths.js';
+import { safeSegment, sessionOutputDir } from './paths.js';
 
 export const TITLE_FILE = 'title.txt';
 const TITLE_MAX = 80;
 export const HERDR_SOURCE = 'agent-sidecar';
 
-// ctx: { root, sessionDir, event, item, fromTurn, toTurn, now, env }
+// ctx: { root, sessionDir, event, item, fromTurn, toTurn, now, env, sessionContext }
 // Returns { written: string|null, warnings: string[] }.
 export function applyOutput(output, text, ctx) {
   if (output.type === 'none') return { written: null, warnings: [] };
@@ -48,11 +48,43 @@ export function expandPathTemplate(template, ctx) {
   const date = localDate(ctx.now);
   const vars = { agent: safeSegment(ctx.event.agent), session: safeSegment(ctx.event.session), item: ctx.item.name, date };
   const expanded = template.replace(/\{(\w+)\}/g, (all, key) => {
+    if (key === 'sessionMonth') {
+      if (!ctx.sessionContext?.sessionMonth) {
+        const reason = ctx.sessionContext?.createdAtError ?? 'session createdAt is unavailable';
+        throw new Error(`sessionMonth unavailable: ${reason}`);
+      }
+      return ctx.sessionContext.sessionMonth;
+    }
     if (!(key in vars)) throw new Error(`unknown placeholder ${all} in output path`);
     return vars[key];
   });
   const withHome = expanded.startsWith('~/') ? path.join(ctx.env.HOME ?? '', expanded.slice(2)) : expanded;
   return path.resolve(ctx.root, withHome);
+}
+
+export function ensureSessionMetadata({ root, event, sessionContext }) {
+  if (!sessionContext?.sessionMonth || !sessionContext.createdAt) {
+    return {
+      written: null,
+      warning: `session metadata skipped: ${sessionContext?.createdAtError ?? 'session createdAt is unavailable'}`,
+    };
+  }
+
+  const dir = sessionOutputDir(root, event.agent, sessionContext.sessionMonth, event.session);
+  const file = path.join(dir, 'metadata.json');
+  const metadata = {
+    sessionId: event.session,
+    agent: event.agent,
+    createdAt: sessionContext.createdAt,
+  };
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    fs.writeFileSync(file, `${JSON.stringify(metadata)}\n`, { flag: 'wx' });
+    return { written: file, warning: null };
+  } catch (err) {
+    if (err.code === 'EEXIST') return { written: file, warning: null };
+    throw err;
+  }
 }
 
 function writeFileOutput(output, text, ctx) {
