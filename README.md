@@ -10,6 +10,14 @@ Pi (extension) ──event──► agent-sidecar event ──detached──► 
 
 The core is agent-neutral; each agent connects through an adapter. **v1 ships the Pi adapter only.**
 
+## Why agent-sidecar?
+
+Some work should continue as an agent session progresses: maintaining titles, summarizing the session and its decisions, and extracting reusable knowledge.
+
+This work is related to the main task, but it is not the main task itself. If the primary agent does it directly, it consumes context, adds tool calls, and burdens the workflow. If it is exposed only as a manually triggered skill, the primary agent must remember these auxiliary responsibilities at all times.
+
+agent-sidecar moves this work outside the primary agent. It runs configured items periodically in the background as the session progresses, so the primary agent can stay focused on the task while the side work happens alongside it.
+
 | Document | Contents |
 |---|---|
 | [CONTRACT.md](CONTRACT.md) | Authoritative: event, adapter interface, item format, config, outputs, storage, CLI |
