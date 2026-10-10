@@ -68,11 +68,20 @@ test('config: defaults, overrides, and errors', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'config-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   assert.equal(loadConfig(dir).model, null);
-  fs.writeFileSync(path.join(dir, 'config.yaml'), 'model: a/cheap\ntoolResultLines: 3\n');
+  assert.deepEqual(loadConfig(dir).lifecycle, { clearTitleOnNew: true, clearTitleOnResume: true });
+  fs.writeFileSync(
+    path.join(dir, 'config.yaml'),
+    'model: a/cheap\ntoolResultLines: 3\nlifecycle:\n  clearTitleOnNew: false\n  clearTitleOnResume: true\n',
+  );
   const c = loadConfig(dir);
   assert.equal(c.model, 'a/cheap');
   assert.equal(c.toolResultLines, 3);
   assert.equal(c.timeoutMs, 120000);
+  assert.deepEqual(c.lifecycle, { clearTitleOnNew: false, clearTitleOnResume: true });
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'lifecycle:\n  clearTitleOnStart: false\n');
+  assert.throws(() => loadConfig(dir), /unknown key "lifecycle.clearTitleOnStart"/);
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'lifecycle:\n  clearTitleOnNew: yes\n');
+  assert.throws(() => loadConfig(dir), /invalid value for "lifecycle.clearTitleOnNew"/);
   fs.writeFileSync(path.join(dir, 'config.yaml'), 'modle: x\n');
   assert.throws(() => loadConfig(dir), /unknown key "modle"/);
   fs.writeFileSync(path.join(dir, 'config.json'), '{}');

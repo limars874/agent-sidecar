@@ -2,6 +2,7 @@
   "name": "agent-sidecar",
   "version": "0.1.0",
   "private": true,
+  "keywords": ["pi-package"],
   "description": "Run configurable side work (titles, summaries, knowledge candidates) alongside AI coding agent sessions, on a cheaper model",
   "type": "module",
   "engines": {
@@ -12,6 +13,9 @@
   },
   "scripts": {
     "test": "node --test"
+  },
+  "pi": {
+    "extensions": ["./adapters/pi/extension.js"]
   },
   "dependencies": {
     "yaml": "^2.6.0"

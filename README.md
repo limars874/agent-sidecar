@@ -35,8 +35,8 @@ mkdir -p ~/.agent-sidecar/items
 cp examples/items/* ~/.agent-sidecar/items/
 cp examples/config.yaml ~/.agent-sidecar/config.yaml   # edit: set model to a cheap one
 
-# Pi loads every *.js in its extensions directory; the symlink keeps it pointing at the clone
-ln -s ~/src/agent-sidecar/adapters/pi/extension.js ~/.pi/agent/extensions/agent-sidecar.js
+# Register the repository as a Pi package; the manifest points at the Pi adapter
+pi install ~/src/agent-sidecar
 
 # optional: put the CLI on PATH
 npm link
@@ -77,6 +77,18 @@ prompt: |
 Shipped examples (`examples/items/`): `title.md` (pane title), `summary.yaml` (work log), `knowledge.md` (knowledge candidates with evidence and confidence; writes nothing when there are none), `turn-log.json` (a script item).
 
 Model choice per item: item `model` → config `model` → the session's current model.
+
+## Lifecycle title cleanup
+
+The Pi adapter treats title cleanup as global lifecycle behavior rather than an item. It clears the pane label and the sidecar-owned Herdr metadata title on session changes by default:
+
+```yaml
+lifecycle:
+  clearTitleOnNew: true
+  clearTitleOnResume: true
+```
+
+Set either value to `false` to preserve the corresponding title. Full configuration is documented in [CONTRACT.md §4](CONTRACT.md#4-global-config).
 
 ## Commands
 

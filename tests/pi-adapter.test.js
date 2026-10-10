@@ -122,3 +122,43 @@ test('extension: applies titles the CLI host writes', async (t) => {
   await waitFor(() => titles.length === 1, { timeoutMs: 5000 });
   assert.deepEqual(titles, ['Renaming files']);
 });
+
+test('extension: lifecycle config clears the pane label and sidecar metadata title', async (t) => {
+  const box = sandbox(t);
+  box.config('lifecycle:\n  clearTitleOnNew: true\n  clearTitleOnResume: false\n');
+  const pi = fakePi();
+  createExtension({ ...box.env, HERDR_PANE_ID: 'w1:p9' })(pi);
+  await pi.handlers.session_start({ reason: 'new' }, fakeCtx());
+  t.after(() => pi.handlers.session_shutdown({}));
+
+  assert.deepEqual(box.herdrCalls(), [
+    ['pane', 'rename', 'w1:p9', '--clear'],
+    ['pane', 'report-metadata', 'w1:p9', '--source', 'agent-sidecar', '--clear-title'],
+  ]);
+
+  await pi.handlers.session_start({ reason: 'resume' }, fakeCtx());
+  assert.equal(box.herdrCalls().length, 2, 'resume is disabled independently');
+});
+
+test('extension: clearing on resume does not restore the saved title immediately', async (t) => {
+  const box = sandbox(t);
+  box.config('lifecycle:\n  clearTitleOnResume: true\n');
+  fs.mkdirSync(box.stateDir(), { recursive: true });
+  fs.writeFileSync(path.join(box.stateDir(), 'title.txt'), 'Old title\n');
+
+  const titles = [];
+  const pi = fakePi();
+  createExtension({ ...box.env, HERDR_PANE_ID: 'w1:p9' })(pi);
+  await pi.handlers.session_start({ reason: 'resume' }, fakeCtx({ titles }));
+  t.after(() => pi.handlers.session_shutdown({}));
+  assert.deepEqual(titles, []);
+
+  fs.writeFileSync(path.join(box.stateDir(), 'title.txt'), 'New title\n');
+  await waitFor(() => titles.length === 1, { timeoutMs: 5000 });
+  assert.deepEqual(titles, ['New title']);
+});
+
+test('Pi package manifest exposes the adapter entry', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '../package.json'), 'utf8'));
+  assert.deepEqual(manifest.pi, { extensions: ['./adapters/pi/extension.js'] });
+});

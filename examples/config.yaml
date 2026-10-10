@@ -3,3 +3,6 @@
 timeoutMs: 120000                     # per model call or script
 maxTranscriptChars: 60000             # {{transcript}} keeps the most recent part beyond this
 toolResultLines: 20                   # tool output lines kept per tool result
+lifecycle:
+  clearTitleOnNew: true                # clear the pane label and sidecar title on /new
+  clearTitleOnResume: true             # clear them on /resume too

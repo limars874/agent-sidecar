@@ -132,6 +132,10 @@ Optional, in `<root>/config.yaml`, `config.yml` or `config.json` (only one may e
 | `timeoutMs` | `120000` | Limit per model call or script. |
 | `maxTranscriptChars` | `60000` | Size cap of `{{transcript}}`. |
 | `toolResultLines` | `20` | Lines kept per tool result. |
+| `lifecycle.clearTitleOnNew` | `true` | On Pi `session_start` with reason `new`, clear the pane label and the sidecar-owned Herdr metadata title. |
+| `lifecycle.clearTitleOnResume` | `true` | The same cleanup for reason `resume`. When enabled, Pi does not immediately restore the resumed session's saved terminal title. |
+
+The lifecycle settings are global behavior, not items: they do not call a model or consume turns. The Pi adapter applies them synchronously at session start. `clearTitle*` only clears titles owned by this sidecar plus the pane label; it does not remove other Herdr metadata sources.
 
 ## 5. Outputs
 

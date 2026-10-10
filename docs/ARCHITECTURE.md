@@ -3,7 +3,7 @@
 ## Components
 
 ```
-adapters/pi/extension.js   in Pi's process: builds events, starts the CLI, applies titles
+adapters/pi/extension.js   in Pi's process: clears lifecycle titles, builds events, starts the CLI, applies titles
         │  agent-sidecar event --json {...}          (detached, fire and forget)
         ▼
 bin/agent-sidecar.js       argument parsing, exit codes
@@ -25,16 +25,17 @@ host/commands.js           CLI host: event, work, run, items
               pi/model.js        pi -p model calls
 ```
 
-Dependency direction: `bin → host → core + adapters`; `adapters → core` (helpers only); `core` imports nothing from `host` or `adapters`. The Pi extension imports only `core/paths.js` and `core/outputs.js` (for the title file name), so loading it in Pi pulls in no YAML parser and no item code.
+Dependency direction: `bin → host → core + adapters`; `adapters → core` (helpers only); `core` imports nothing from `host` or `adapters`. The Pi extension imports `core/paths.js`, `core/outputs.js` and `core/config.js`; loading it in Pi pulls in the small YAML config parser but no item or model-runner code.
 
 ## Data flow of one turn
 
-1. Pi fires `agent_settled` (the run is fully done: no retry, compaction or queued message left). If it was not aborted, the extension builds the event from `ctx`: session id and file from `ctx.sessionManager`, model from `ctx.model`, pane from `$HERDR_PANE_ID`, turn = user messages on `getBranch()`.
-2. It spawns `node bin/agent-sidecar.js event --json <event>` detached with stdio ignored, and returns. Pi never waits.
-3. `event` validates the event, loads the items, takes the session lock, runs `planEvent` on `state.json`, saves the new state (cursors moved, `running` markers set), releases the lock.
-4. If something is due, it writes `jobs/<job>.json` and spawns `agent-sidecar work <job>` detached, with stdout/stderr going to `sidecar.log`. Then it exits.
-5. `work` records its pid in the `running` markers, reads the transcript once, and runs the job's items one after another: render the turn slice, fill the prompt, call `pi -p` (or run the script), apply the output. After each item it appends to `runs.jsonl` and, under the lock, clears `running` and stores `lastRun`. Finally it removes the job file.
-6. If an item wrote `title.txt`, the extension (which polls that file once a second) calls `ctx.ui.setTitle`. Herdr's pane title was already set in step 5.
+1. Pi fires `session_start` when a session starts or changes. For `new` and `resume`, the extension reads the global lifecycle policy and, when enabled, clears the pane label and the sidecar-owned Herdr metadata title. A configured resume cleanup also suppresses the immediate restoration of that session's saved terminal title.
+2. Pi fires `agent_settled` (the run is fully done: no retry, compaction or queued message left). If it was not aborted, the extension builds the event from `ctx`: session id and file from `ctx.sessionManager`, model from `ctx.model`, pane from `$HERDR_PANE_ID`, turn = user messages on `getBranch()`.
+3. It spawns `node bin/agent-sidecar.js event --json <event>` detached with stdio ignored, and returns. Pi never waits.
+4. `event` validates the event, loads the items, takes the session lock, runs `planEvent` on `state.json`, saves the new state (cursors moved, `running` markers set), releases the lock.
+5. If something is due, it writes `jobs/<job>.json` and spawns `agent-sidecar work <job>` detached, with stdout/stderr going to `sidecar.log`. Then it exits.
+6. `work` records its pid in the `running` markers, reads the transcript once, and runs the job's items one after another: render the turn slice, fill the prompt, call `pi -p` (or run the script), apply the output. After each item it appends to `runs.jsonl` and, under the lock, clears `running` and stores `lastRun`. Finally it removes the job file.
+7. If an item wrote `title.txt`, the extension (which polls that file once a second) calls `ctx.ui.setTitle`. Herdr's pane title was already set in step 6.
 
 ## Why two detached hops
 
