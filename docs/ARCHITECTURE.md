@@ -49,6 +49,7 @@ Dependency direction: `bin → host → core + adapters + runners`; adapters rea
 - No process keeps state in memory across events. Everything lives in `state/<agent>/<session>/` (CONTRACT §6).
 - Every read-modify-write of `state.json` happens under the session's lock file; writes go through a temp file and `rename`.
 - `scheduledThrough` moves when a run is scheduled, while `completedThrough`/`lastTurn` move only after success. Two quick events therefore cannot schedule the same turns twice, and failed work remains retryable instead of silently losing its delta.
+- Execution is at-least-once: output is applied before the completion checkpoint, so a crash in that small window can repeat a range. `replace` snapshots normally tolerate this; `append` outputs may duplicate records.
 - One item never runs twice at once in a session (the `running` marker). Different items, and different sessions, run in parallel.
 - Crashed workers are detected by a dead pid or a 30-minute age; the item is then scheduled again on the next due event.
 

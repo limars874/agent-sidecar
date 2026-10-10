@@ -58,6 +58,24 @@ test('summary snapshot replaces the previous file and feeds it into the next del
   const file = path.join(box.root, 'out', 'pi', PI_SESSION_ID, 'summary.md');
   assert.equal(fs.readFileSync(file, 'utf8'), 'snapshot two\n');
   assert.match(box.piCalls()[1].prompt, /\[file out\/\{agent\}\/\{session\}\/summary\.md\]\nsnapshot one/);
+
+  // Repeating a replace run keeps one current snapshot rather than duplicating history.
+  const repeat = cli(['run', 'summary', '--agent', 'pi', '--session', PI_SESSION], { ...box.env, FAKE_PI_REPLY: 'snapshot two' });
+  assert.equal(repeat.code, 0, repeat.stderr);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'snapshot two\n');
+});
+
+test('append output may duplicate records when a run is repeated', (t) => {
+  const box = sandbox(t);
+  box.item('log.yaml', 'everyTurns: 1\noutput:\n  file: out/log.md\nprompt: Log');
+  const args = ['run', 'log', '--agent', 'pi', '--session', PI_SESSION];
+  for (let i = 0; i < 2; i += 1) {
+    const r = cli(args, { ...box.env, FAKE_PI_REPLY: 'same record' });
+    assert.equal(r.code, 0, r.stderr);
+  }
+  const output = fs.readFileSync(path.join(box.root, 'out', 'log.md'), 'utf8');
+  assert.equal((output.match(/^## /gm) ?? []).length, 2);
+  assert.equal((output.match(/same record/g) ?? []).length, 2);
 });
 
 test('event: session model is the fallback; failures are recorded, not fatal', (t) => {

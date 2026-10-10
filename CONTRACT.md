@@ -138,7 +138,7 @@ prompt: |
 | `maxChars` | integer ≥ 1 | Per-item context budget. Defaults to global `maxTranscriptChars`. |
 | `files` | list of path templates | Optional files to preload as `[file …]` blocks. Relative paths resolve from the storage root and support the same placeholders as outputs; missing files are skipped. |
 
-Messages are selected by scope and role before rendering. Complete message blocks are retained within the budget where possible; only a single oversized block is cut as a last resort. Tool results are additionally limited to `toolResultLines` lines each. The rendered context is available as `{{transcript}}` and is automatically appended inside `<transcript>…</transcript>` when the prompt does not place that placeholder.
+Messages are selected by scope and role before rendering. When `files` are configured, file blocks are rendered first in listed order and reserve the budget; the transcript uses the remainder. A single oversized file may be truncated, and complete transcript message blocks are retained within the remaining budget where possible; only a single oversized message block is cut as a last resort. Tool results are additionally limited to `toolResultLines` lines each. The rendered context is available as `{{transcript}}` and is automatically appended inside `<transcript>…</transcript>` when the prompt does not place that placeholder.
 
 Other placeholders are `{{agent}}`, `{{session}}`, `{{item}}`, `{{turn}}` (= `toTurn`), `{{fromTurn}}`, `{{toTurn}}` and `{{cwd}}` (the session's working directory if the transcript has one). Unknown placeholders are left as written.
 
@@ -205,6 +205,10 @@ The lifecycle settings are global behavior, not items: they do not call a model 
 | `{ file: <template>, mode: "replace" }` | Atomically replaces the file with the trimmed result and a trailing newline. An empty result leaves the existing file unchanged. Useful for current-state snapshots such as `summary.md`. |
 
 Path template placeholders: `{agent}`, `{session}`, `{item}`, `{date}` (local `YYYY-MM-DD`). Any other `{…}` is an error. `~/` expands to `$HOME`; relative paths are relative to the storage root. `{agent}` and `{session}` are made safe for one path segment.
+
+### 5.1 Execution semantics
+
+Scheduled item execution is **at-least-once**, not exactly-once. The output is written before the successful `completedThrough` checkpoint is committed, so a process crash in between can cause the same turn range to run again on a later event. `replace` output is generally safe for this retry because it rewrites the snapshot; `append` output can produce duplicate records and should be used only when that trade-off is acceptable. The v1 implementation intentionally has no transaction, deduplication or queue mechanism for this small crash window.
 
 ## 6. Storage
 

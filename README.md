@@ -110,7 +110,9 @@ Shipped examples (`examples/items/`): `title.md` (pane title), `summary.yaml` (c
 
 Runner choice per item: item `runner` → config `runner` → `pi` (the default runner). The runner is independent from the agent adapter: the Pi adapter reads the session transcript, while the selected runner performs the side work.
 
-Context can be a legacy `delta`/`session` string or a mapping with `scope`, `turns`, `include`, `maxChars` and optional `files`. Messages are filtered by role before rendering, and complete blocks are kept within the per-item budget where possible. Use `output.mode: replace` for a current-state snapshot such as `summary.md`; the default file mode remains `append` for activity logs and knowledge candidates.
+Context can be a legacy `delta`/`session` string or a mapping with `scope`, `turns`, `include`, `maxChars` and optional `files`. Existing context files consume the budget first, then the newest transcript uses the remainder; a single oversized file may be truncated, but a long delta cannot make the prior snapshot disappear. Use `output.mode: replace` for a current-state snapshot such as `summary.md`; the default file mode remains `append` for activity logs and knowledge candidates.
+
+Scheduled work is at-least-once: a crash after output is written but before the completion checkpoint can repeat a range. `replace` snapshots usually tolerate this; `append` outputs may contain duplicate records.
 
 Effort choice per item: item `effort` → config `effort` → the runner's default. For Pi, `effort` is passed as `--thinking`; the old `model: provider/id:level` form remains supported when no explicit effort is set. Jcode uses its own `~/.jcode/config.toml` effort setting.
 

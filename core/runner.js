@@ -76,7 +76,36 @@ export function renderContext(item, messages, { root, event, now, env, fromTurn,
     { include: spec.include, toolResultLines: config.toolResultLines },
   );
   const fileBlocks = readContextFiles(spec.files, { root, event, item, now, env });
-  return renderBlocks([...fileBlocks, ...transcriptBlocks], spec.maxChars ?? config.maxTranscriptChars);
+  const maxChars = spec.maxChars ?? config.maxTranscriptChars;
+  const fileText = renderContextFiles(fileBlocks, maxChars);
+  const separator = fileText && transcriptBlocks.length > 0 ? 2 : 0;
+  const transcriptBudget = Math.max(0, maxChars - fileText.length - separator);
+  const transcriptText = transcriptBudget > 0 ? renderBlocks(transcriptBlocks, transcriptBudget) : '';
+  return [fileText, transcriptText].filter(Boolean).join('\n\n');
+}
+
+function renderContextFiles(blocks, maxChars) {
+  if (blocks.length === 0 || maxChars < 1) return '';
+  let remaining = maxChars;
+  const rendered = [];
+  const marker = '… [file content truncated]';
+
+  for (const block of blocks) {
+    const separator = rendered.length > 0 ? 2 : 0;
+    const available = remaining - separator;
+    if (available <= 0) break;
+    if (block.length <= available) {
+      rendered.push(block);
+      remaining -= separator + block.length;
+      continue;
+    }
+    const content = available <= marker.length
+      ? block.slice(0, available)
+      : `${block.slice(0, available - marker.length)}${marker}`;
+    rendered.push(content);
+    break;
+  }
+  return rendered.join('\n\n');
 }
 
 function contextRange(spec, fromTurn, toTurn) {

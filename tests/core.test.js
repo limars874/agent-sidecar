@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { validateEvent } from '../core/event.js';
 import { applyOutput, cleanTitle, expandPathTemplate } from '../core/outputs.js';
 import { safeSegment } from '../core/paths.js';
-import { fillPrompt, resolveEffort, resolveModel, runItem } from '../core/runner.js';
+import { fillPrompt, renderContext, resolveEffort, resolveModel, runItem } from '../core/runner.js';
 import { emptyState, planEvent } from '../core/scheduler.js';
 import { readState, runIsStale, updateState, withLock } from '../core/state.js';
 import { countTurns, renderTranscript, sliceTurns } from '../core/transcript.js';
@@ -196,6 +196,45 @@ test('context recent scope, role filtering and previous files are rendered withi
   assert.doesNotMatch(result.text, /old request/);
   assert.match(result.text, /new request/);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('context files keep priority when files and transcript exceed the total budget', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'context-budget-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'summary.md'), 'Previous snapshot');
+  const item = {
+    name: 'summary',
+    dir,
+    contextSpec: { scope: 'delta', turns: null, include: ['user', 'assistant'], maxChars: 100, files: ['summary.md'] },
+  };
+  const rendered = renderContext(item, [
+    { role: 'user', text: 'new request' },
+    { role: 'assistant', text: 'new answer '.repeat(100) },
+  ], {
+    root: dir,
+    event: { agent: 'pi', session: 's' },
+    now: new Date(),
+    env: { HOME: dir },
+    fromTurn: 0,
+    toTurn: 1,
+    config: { maxTranscriptChars: 1000, toolResultLines: 20 },
+  });
+  assert.ok(rendered.length <= 100);
+  assert.match(rendered, /\[file summary\.md\]\nPrevious snapshot/);
+  assert.match(rendered, /\[assistant\]/);
+
+  fs.writeFileSync(path.join(dir, 'summary.md'), 'Previous snapshot '.repeat(100));
+  const oversizedFile = renderContext(item, [], {
+    root: dir,
+    event: { agent: 'pi', session: 's' },
+    now: new Date(),
+    env: { HOME: dir },
+    fromTurn: 0,
+    toTurn: 1,
+    config: { maxTranscriptChars: 1000, toolResultLines: 20 },
+  });
+  assert.ok(oversizedFile.length <= 100);
+  assert.match(oversizedFile, /^\[file summary\.md\]/);
 });
 
 test('prompt filling appends the transcript when the prompt does not place it', () => {

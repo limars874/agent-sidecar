@@ -40,6 +40,7 @@ One developer running agent sessions (initially Pi) in terminals or Herdr panes,
 | R16 | Let each item choose the transcript scope, roles, files and context budget. | Legacy `delta`/`session` plus `context.scope`, `turns`, `include`, `files` and `maxChars`. |
 | R17 | Distinguish scheduled work from successfully completed work. | `scheduledThrough` prevents duplicate scheduling; `completedThrough` advances only after success. |
 | R18 | Support both activity logs and current-state files. | File output defaults to `append`; `mode: replace` atomically replaces a snapshot. |
+| R19 | Make scheduled execution semantics explicit. | At-least-once delivery: replace snapshots are usually repeat-safe; append logs may duplicate after a crash window. |
 
 ## Non-goals (v1)
 
@@ -47,7 +48,7 @@ One developer running agent sessions (initially Pi) in terminals or Herdr panes,
 - Writing directly into a knowledge base: knowledge output is candidates in files, reviewed by a person.
 - Running items at session end, on compaction, or on a timer; only every N turns.
 - A per-project items directory; there is one global directory.
-- Retry backoff, attempt limits, a daemon, or a UI beyond titles.
+- Exactly-once delivery, transactional output, retry backoff, attempt limits, a daemon, or a UI beyond titles.
 
 ## Success criteria
 

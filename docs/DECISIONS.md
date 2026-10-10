@@ -22,7 +22,7 @@
 
 **D10 — Items: strict validation, all three formats normalized to one shape.** Unknown keys are errors, a bad file is skipped and reported, others keep working. Markdown suits long prompts (body), YAML suits settings-heavy or script items, JSON suits generated items.
 
-**D11 — Context is a per-item projection, not one global transcript string.** Legacy `delta` and `session` remain valid, while a mapping can select `scope`, recent turns, message roles, files and a per-item character budget. Messages are filtered and selected before budget truncation so tool output cannot crowd out the important conversation by accident.
+**D11 — Context is a per-item projection, not one global transcript string.** Legacy `delta` and `session` remain valid, while a mapping can select `scope`, recent turns, message roles, files and a per-item character budget. Existing context files consume the budget first, then the newest transcript is rendered into the remainder, so a long delta cannot make the prior snapshot disappear.
 
 **D12 — Knowledge output is candidates, not knowledge.** Items append to files; nothing writes into a curated knowledge base. Review and promotion stay with a person.
 
@@ -37,6 +37,8 @@
 **D17 — File output explicitly supports append and replace.** Append remains the backward-compatible default for activity logs and knowledge candidates. Replace atomically writes a complete current-state snapshot, so summary items can consume the previous snapshot plus new delta without accumulating headers or historical prose.
 
 **D18 — Keep context files as a convenience, not a capability boundary.** `context.files` preloads existing files into the rendered context and skips a missing file on the first run. It does not restrict a runner or script from reading or writing other paths; capability restrictions require a separate security design.
+
+**D19 — Scheduled execution is at-least-once.** Output is written before the successful completion checkpoint, so a crash in that small window can repeat a turn range. `replace` snapshots normally tolerate the repeat; `append` logs may duplicate records. Do not add transactions or general deduplication until real usage justifies their complexity.
 
 ## Known limitations
 
