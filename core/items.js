@@ -1,11 +1,11 @@
 // Item loader (CONTRACT.md "Items"). Every file format becomes the same Item:
-//   { name, file, dir, everyTurns, runner, model, effort, kind: 'prompt'|'script', prompt, script,
+//   { name, file, dir, everyTurns, runner, model, effort, feedback, kind: 'prompt'|'script', prompt, script,
 //     context, contextSpec, output: {type:'title'}|{type:'file', path, mode}|{type:'none'} }
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_EXTS, MARKDOWN_EXTS, parseDataFile, parseMarkdown } from './files.js';
 
-const KEYS = new Set(['name', 'everyTurns', 'runner', 'model', 'effort', 'prompt', 'script', 'context', 'output']);
+const KEYS = new Set(['name', 'everyTurns', 'runner', 'model', 'effort', 'feedback', 'prompt', 'script', 'context', 'output']);
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
 const CONTEXT_SCOPES = new Set(['delta', 'session', 'recent']);
 const CONTEXT_ROLES = new Set(['user', 'assistant', 'toolCall', 'toolResult']);
@@ -110,6 +110,10 @@ function validateItem(raw, file) {
     throw new Error('effort must be a non-empty string');
   }
 
+  if (raw.feedback !== undefined && typeof raw.feedback !== 'boolean') {
+    throw new Error('feedback must be a boolean');
+  }
+
   const hasPrompt = raw.prompt !== undefined;
   const hasScript = raw.script !== undefined;
   if (hasPrompt === hasScript) throw new Error('exactly one of prompt or script is required');
@@ -126,6 +130,7 @@ function validateItem(raw, file) {
     runner: raw.runner ?? null,
     model: raw.model ?? null,
     effort: raw.effort ?? null,
+    feedback: raw.feedback ?? false,
     kind: hasPrompt ? 'prompt' : 'script',
     prompt: hasPrompt ? raw.prompt : null,
     script: hasScript ? raw.script : null,

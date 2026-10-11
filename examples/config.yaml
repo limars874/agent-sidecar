@@ -5,6 +5,8 @@ runner: pi                            # global default runner for prompt items
 timeoutMs: 120000                     # per model call or script
 maxTranscriptChars: 60000             # fallback context budget; items can override it with context.maxChars
 toolResultLines: 20                   # tool output lines kept per tool result
+# feedback:
+#   natsUrl: nats://127.0.0.1:4222    # local NATS broker for items with feedback: true
 lifecycle:
   clearTitleOnNew: true                # clear the pane label and sidecar title on /new
   clearTitleOnResume: true             # clear them on /resume too

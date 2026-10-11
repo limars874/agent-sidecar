@@ -283,7 +283,7 @@ test('the shipped examples load cleanly', (t) => {
   fs.copyFileSync(path.join(examples, 'config.yaml'), path.join(box.root, 'config.yaml'));
   const r = cli(['items'], box.env);
   assert.equal(r.code, 0, r.stderr);
-  assert.deepEqual(r.stdout.trim().split('\n').map((l) => JSON.parse(l).name).sort(), ['knowledge', 'summary', 'title', 'turn-log']);
+  assert.deepEqual(r.stdout.trim().split('\n').map((l) => JSON.parse(l).name).sort(), ['knowledge', 'review', 'summary', 'title', 'turn-log']);
   const script = cli(['run', 'turn-log', '--agent', 'pi', '--session', PI_SESSION], box.env);
   assert.equal(script.code, 0, script.stderr);
   assert.equal(script.json().text.trim(), 'reached turn 2 in /work/demo');

@@ -26,7 +26,7 @@
 
 **D12 — Knowledge output is candidates, not knowledge.** Items append to files; nothing writes into a curated knowledge base. Review and promotion stay with a person.
 
-**D13 — Plain ESM JavaScript, one dependency (`yaml`).** Matches the user's other tools (tug), runs without a build step, and Pi loads `.js` extensions directly. Node has no YAML parser, so `yaml` is the only dependency.
+**D13 — Plain ESM JavaScript with small runtime dependencies.** Matches the user's other tools (tug), runs without a build step, and Pi loads `.js` extensions directly. `yaml` handles item/config parsing; the official `@nats-io/nats-core` and `@nats-io/transport-node` packages provide optional feedback transport without a broker-specific framework.
 
 **D14 — Adapters and runners are separate.** An adapter reads the observed agent's session and reports its events; a runner performs one-shot model work. This lets a Pi session use a future Claude or Codex runner without replacing its Pi transcript adapter. The default runner remains `pi` for backward compatibility.
 
@@ -41,6 +41,8 @@
 **D19 — Scheduled execution is at-least-once.** Output is written before the successful completion checkpoint, so a crash in that small window can repeat a turn range. `replace` snapshots normally tolerate the repeat; `append` logs may duplicate records. Do not add transactions or general deduplication until real usage justifies their complexity.
 
 **D20 — Session output grouping uses the original UTC creation month.** `{sessionMonth}` comes from the agent session header, not sidecar processing time, and remains stable across retries and month boundaries. The canonical metadata file is created at the first valid `event`, with `work` and manual `run` as idempotent fallbacks. It is fully prepared in a temporary file and published with exclusive creation; existing metadata is validated and never overwritten. Legacy/custom paths remain compatible and are not auto-migrated.
+
+**D22 — Feedback is best-effort NATS delivery, not a second output system.** An item opts in with `feedback: true`; the worker publishes a bounded advisory envelope only after a successful non-empty output. The Pi extension creates an ephemeral per-process route, validates `instanceId` and the current session, and uses `steer` while active or `nextTurn` while idle without triggering a turn. Broker failures warn but do not fail the item or roll back its checkpoint. V1 deliberately has no JetStream, persistence, outbox, RPC or resend queue.
 
 ## Known limitations
 
@@ -60,3 +62,4 @@
 - **Script items are trusted code.** They run with the user's environment and permissions, like any file the user places in `items/`.
 - **Pi runner CLI flags.** The `pi -p` flags were taken from Pi's source on GitHub; a Pi older than those flags fails every model call with `Unknown option` (visible in `runs.jsonl`). MCP servers configured for Pi still start in the child.
 - **`AGENT_SIDECAR_NODE`.** Inside the Pi binary, `process.execPath` is Pi, not Node, so the extension starts the CLI with `node` from `PATH` (or `AGENT_SIDECAR_NODE`).
+- **Feedback is best-effort and advisory.** A broker restart, missing subscriber or process shutdown can lose a message; the file output and checkpoint are authoritative. Feedback content is not automatically trusted or persisted by Pi.

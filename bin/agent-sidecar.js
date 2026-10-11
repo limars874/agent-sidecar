@@ -37,7 +37,7 @@ function print(value) {
   process.stdout.write(typeof value === 'string' ? `${value}\n` : `${JSON.stringify(value)}\n`);
 }
 
-function main(argv, env = process.env) {
+async function main(argv, env = process.env) {
   const [command, ...args] = argv;
   const root = rootDir(env);
   try {
@@ -51,7 +51,7 @@ function main(argv, env = process.env) {
         } catch (err) {
           throw new Error(`event is not valid JSON: ${err.message}`);
         }
-        print(handleEvent(raw, { root, env, foreground: values.foreground }));
+        print(await handleEvent(raw, { root, env, foreground: values.foreground }));
         return 0;
       }
       case 'run': {
@@ -88,14 +88,14 @@ function main(argv, env = process.env) {
         parse(args, {}, 0);
         const { items, errors } = listItems({ root });
         for (const i of items) {
-          print({ name: i.name, everyTurns: i.everyTurns, kind: i.kind, runner: i.runner, model: i.model, effort: i.effort, context: i.contextSpec, output: i.output, file: i.file });
+          print({ name: i.name, everyTurns: i.everyTurns, kind: i.kind, runner: i.runner, model: i.model, effort: i.effort, feedback: i.feedback, context: i.contextSpec, output: i.output, file: i.file });
         }
         for (const e of errors) process.stderr.write(`agent-sidecar: ${e.file}: ${e.message}\n`);
         return errors.length ? 1 : 0;
       }
       case 'work': {
         const { positionals } = parse(args, {}, 1);
-        print(work(path.resolve(positionals[0]), { root, env }));
+        print(await work(path.resolve(positionals[0]), { root, env }));
         return 0;
       }
       case undefined:
@@ -117,4 +117,6 @@ function main(argv, env = process.env) {
   }
 }
 
-process.exitCode = main(process.argv.slice(2));
+main(process.argv.slice(2)).then((code) => {
+  process.exitCode = code;
+});

@@ -14,7 +14,13 @@ An adapter reports each finished turn of an agent session as one JSON object, pa
   "transcriptRef": "/Users/me/.pi/agent/sessions/…/2026-10-09T10-00-00_0199a3f2-….jsonl",
   "model": "anthropic/claude-sonnet-4-5",
   "pane": "w1:p4",
-  "turn": 7
+  "turn": 7,
+  "feedbackRoute": {
+    "v": 1,
+    "instanceId": "ephemeral-extension-instance",
+    "replySubject": "_INBOX.…",
+    "session": "0199a3f2-…"
+  }
 }
 ```
 
@@ -27,6 +33,7 @@ An adapter reports each finished turn of an agent session as one JSON object, pa
 | `model` | string or null | no | The session's current model, passed to the selected runner (Pi: `provider/id`). Last fallback for model choice. |
 | `pane` | string or null | no | Herdr pane id when the agent runs inside Herdr (`$HERDR_PANE_ID`). Enables Herdr title updates. |
 | `turn` | integer ≥ 0 or null | no | Number of user turns on the session's active branch, including the one just finished. When missing, the CLI counts the turns in the transcript. |
+| `feedbackRoute` | object | no | Ephemeral Pi delivery address for opted-in feedback. It contains `v: 1`, `instanceId`, `replySubject` and the matching `session`. Old events without it remain valid. The private subject is never written to normal logs. |
 
 **Turn**: one user prompt and everything the agent did for it, until the agent is fully idle again. Model calls inside tool loops are not separate turns. A turn ends when the agent has settled (Pi: `agent_settled`). Aborted runs (Esc) are not reported.
 
@@ -81,6 +88,7 @@ Items live in `<root>/items/`. Each `.md`, `.yaml`, `.yml` or `.json` file is on
 | `runner` | string | none | Runner for this item (see §3.3). If absent, use the global runner, then `pi`. |
 | `model` | string | none | Model for this item (see §3.5). |
 | `effort` | string | none | Reasoning effort for this item (see §3.4). |
+| `feedback` | boolean | `false` | After a successful non-empty result, publish an advisory feedback envelope to the originating Pi instance when the event includes a live route. File/title output remains independent. |
 | `prompt` | string | — | A prompt for the model. Exactly one of `prompt` / `script`. |
 | `script` | string | — | A shell command (`/bin/sh -c`), run in the items directory. Exactly one of `prompt` / `script`. |
 | `context` | string or mapping | `delta` | Transcript scope and projection. A mapping can set `scope`, `turns`, `include`, `maxChars` and `files` (see §3.2). |
@@ -193,10 +201,13 @@ Optional, in `<root>/config.yaml`, `config.yml` or `config.json` (only one may e
 | `timeoutMs` | `120000` | Limit per model call or script. |
 | `maxTranscriptChars` | `60000` | Size cap of `{{transcript}}`. |
 | `toolResultLines` | `20` | Lines kept per tool result. |
+| `feedback.natsUrl` | `nats://127.0.0.1:4222` | NATS server URL used only when at least one item opts into feedback. Credentials, when needed, may be supplied in the URL; keep the broker bound to localhost. |
 | `lifecycle.clearTitleOnNew` | `true` | On Pi `session_start` with reason `new`, clear the pane label and the sidecar-owned Herdr metadata title. |
 | `lifecycle.clearTitleOnResume` | `true` | The same cleanup for reason `resume`. When enabled, Pi does not immediately restore the resumed session's saved terminal title. |
 
 The lifecycle settings are global behavior, not items: they do not call a model or consume turns. The Pi adapter applies them synchronously at session start. `clearTitle*` only clears titles owned by this sidecar plus the pane label; it does not remove other Herdr metadata sources.
+
+Feedback is opt-in per item. If no item has `feedback: true`, the Pi extension does not connect to NATS. Feedback is best-effort live delivery; the disk output and successful item checkpoint remain authoritative.
 
 ## 5. Outputs
 
@@ -220,6 +231,12 @@ The file is fully written and synced to a same-directory temporary file, then pu
 ### 5.1 Execution semantics
 
 Scheduled item execution is **at-least-once**, not exactly-once. The output is written before the successful `completedThrough` checkpoint is committed, so a process crash in between can cause the same turn range to run again on a later event. `replace` output is generally safe for this retry because it rewrites the snapshot; `append` output can produce duplicate records and should be used only when that trade-off is acceptable. The v1 implementation intentionally has no transaction, deduplication or queue mechanism for this small crash window.
+
+### 5.2 Feedback publication
+
+For an item with `feedback: true`, the worker publishes only after the runner result has been successfully applied to the configured output. Empty results do not publish. The worker uses core NATS with a bounded connection/flush timeout; a broker failure, missing route or publish failure becomes a warning in `runs.jsonl` and `sidecar.log`, while the item remains successful and its checkpoint advances. No retry of the model, outbox, JetStream stream or durable inbox is used.
+
+The envelope is versioned JSON with `v: 1`, `type: "feedback"`, a unique `id`, `instanceId`, `agent`, `session`, `item`, `sourceTurn`, `createdAt` and short `content`. The envelope is limited to 16 KiB and content to 4 KiB of UTF-8. The subject selects the destination; the Pi extension validates the envelope and current session before calling Pi's `sendMessage()`. A successful NATS publish only means the broker accepted the message; it is not proof that the model received or acted on it.
 
 ## 6. Storage
 

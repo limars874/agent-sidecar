@@ -4,7 +4,8 @@ Runs configurable side work alongside AI coding agent sessions: every few turns 
 
 ```
 Pi (extension) ──event──► agent-sidecar event ──detached──► agent-sidecar work ──► selected runner (default: pi -p) / script
-                                 │                                │
+       ▲                         │                                │
+       └──── optional NATS feedback ◄──── output + checkpoint ─────┘
                      ~/.agent-sidecar/state/pi/<session>/   outputs: title.txt + Herdr pane title, files under out/
 ```
 
@@ -31,6 +32,7 @@ agent-sidecar moves this work outside the primary agent. It runs configured item
 - Node 20.12+ (on `PATH` as `node`, used by the Pi extension to start the CLI)
 - Pi (`pi` on `PATH`, or `AGENT_SIDECAR_PI_BIN`), logged in to the providers your items use
 - Optional: Herdr, for pane titles
+- Optional: a local NATS server, for feedback from sidecar items back to the originating Pi session
 
 ## Install (on the machine that runs Pi)
 
@@ -40,8 +42,10 @@ cd ~/src/agent-sidecar && npm ci
 
 # items and optional global config
 mkdir -p ~/.agent-sidecar/items
-cp examples/items/* ~/.agent-sidecar/items/
+cp examples/items/title.md examples/items/summary.yaml examples/items/knowledge.md examples/items/turn-log.json ~/.agent-sidecar/items/
 cp examples/config.yaml ~/.agent-sidecar/config.yaml   # edit: set model to a cheap one
+# optional: enable feedback for an explicitly chosen item
+# cp examples/items/review.md ~/.agent-sidecar/items/
 
 # Register the repository as a Pi package; the manifest points at the Pi adapter
 pi install ~/src/agent-sidecar
@@ -106,7 +110,7 @@ prompt: |
   {{transcript}}
 ```
 
-Shipped examples (`examples/items/`): `title.md` (pane title), `summary.yaml` (current-state snapshot), `knowledge.md` (knowledge candidates with evidence and confidence; writes nothing when there are none), `turn-log.json` (an append-only script item).
+Shipped examples (`examples/items/`): `title.md` (pane title), `summary.yaml` (current-state snapshot), `knowledge.md` (knowledge candidates with evidence and confidence; writes nothing when there are none), `review.md` (optional `feedback: true` advisory item), `turn-log.json` (an append-only script item).
 
 Runner choice per item: item `runner` → config `runner` → `pi` (the default runner). The runner is independent from the agent adapter: the Pi adapter reads the session transcript, while the selected runner performs the side work.
 
@@ -117,6 +121,19 @@ Scheduled work is at-least-once: a crash after output is written but before the 
 Effort choice per item: item `effort` → config `effort` → the runner's default. For Pi, `effort` is passed as `--thinking`; the old `model: provider/id:level` form remains supported when no explicit effort is set. Jcode uses its own `~/.jcode/config.toml` effort setting.
 
 Model choice per item: item `model` → config `model` → the session's current model.
+
+## Feedback to the originating Pi session
+
+An item can opt in with `feedback: true`. After a successful non-empty result, agent-sidecar publishes a short advisory message through NATS to the exact Pi process that emitted the event; the Pi extension validates the instance and current session before queueing it with `sendMessage()`. A successful publish is not proof that the model received the message. Feedback does not replace file/title output and broker failures only produce bounded warnings; they do not fail the item or roll back its checkpoint.
+
+Configure the broker globally; do not put the URL in every item:
+
+```yaml
+feedback:
+  natsUrl: nats://127.0.0.1:4222
+```
+
+The default is the localhost URL above. For an authenticated local broker, use a credentialed URL or another supported NATS connection form in the untracked config file. Keep the broker bound to localhost unless you have deliberately secured remote access. The extension connects only when at least one loaded item opts in, starts after `session_start`, and closes on `session_shutdown`; the sidecar's own `pi -p` model children never subscribe or emit feedback.
 
 ## Lifecycle title cleanup
 
