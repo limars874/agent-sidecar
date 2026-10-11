@@ -175,6 +175,9 @@ test('extension: routes feedback to the active session and selects idle delivery
   createExtension(box.env, {
     connectNats: async (options) => {
       assert.equal(options.servers, 'nats://127.0.0.1:4222');
+      assert.equal(options.reconnect, true);
+      assert.equal(options.waitOnFirstConnect, false);
+      assert.equal(options.timeout, 1500);
       return connection;
     },
     createFeedbackRoute: () => route,

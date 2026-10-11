@@ -131,7 +131,9 @@ test('feedback envelope is bounded and publisher flushes through the injected NA
   assert.equal(envelope.item, 'review');
   assert.equal(envelope.sourceTurn, 4);
   assert.equal(envelope.content, 'Use the documented API.');
-  assert.throws(() => validateFeedbackEnvelope({ ...envelope, content: 'x'.repeat(4097) }), /too (large|long)/);
+  const longEnvelope = validateFeedbackEnvelope({ ...envelope, content: 'x'.repeat(1024) });
+  assert.equal(longEnvelope.content.length, 1024);
+  assert.throws(() => validateFeedbackEnvelope({ ...envelope, content: 'x'.repeat(4097) }), /too large/);
   assert.equal(flushed, 1);
   assert.equal(closed, 1);
 

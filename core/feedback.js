@@ -47,10 +47,11 @@ export function validateFeedbackEnvelope(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('feedback payload must be an object');
   if (value.v !== FEEDBACK_VERSION) throw new Error('unsupported feedback version');
   if (value.type !== FEEDBACK_TYPE) throw new Error('unsupported feedback type');
-  for (const key of ['id', 'instanceId', 'agent', 'session', 'item', 'createdAt', 'content']) {
+  for (const key of ['id', 'instanceId', 'agent', 'session', 'item', 'createdAt']) {
     if (typeof value[key] !== 'string' || value[key] === '') throw new Error(`feedback.${key} must be a non-empty string`);
     if (value[key].length > 512) throw new Error(`feedback.${key} is too long`);
   }
+  if (typeof value.content !== 'string' || value.content === '') throw new Error('feedback.content must be a non-empty string');
   if (!Number.isInteger(value.sourceTurn) || value.sourceTurn < 0) throw new Error('feedback.sourceTurn must be a non-negative integer');
   if (value.content.trim() === '') throw new Error('feedback.content must not be empty');
   if (Buffer.byteLength(value.content, 'utf8') > FEEDBACK_MAX_CONTENT_BYTES) throw new Error('feedback.content is too large');

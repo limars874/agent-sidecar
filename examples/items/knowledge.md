@@ -1,6 +1,5 @@
 ---
 everyTurns: 5
-feedback: true
 context:
   scope: delta
   include: [user, assistant, toolResult]

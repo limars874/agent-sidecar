@@ -42,8 +42,10 @@ cd ~/src/agent-sidecar && npm ci
 
 # items and optional global config
 mkdir -p ~/.agent-sidecar/items
-cp examples/items/* ~/.agent-sidecar/items/
+cp examples/items/title.md examples/items/summary.yaml examples/items/knowledge.md examples/items/turn-log.json ~/.agent-sidecar/items/
 cp examples/config.yaml ~/.agent-sidecar/config.yaml   # edit: set model to a cheap one
+# optional: enable feedback for an explicitly chosen item
+# cp examples/items/review.md ~/.agent-sidecar/items/
 
 # Register the repository as a Pi package; the manifest points at the Pi adapter
 pi install ~/src/agent-sidecar
@@ -108,7 +110,7 @@ prompt: |
   {{transcript}}
 ```
 
-Shipped examples (`examples/items/`): `title.md` (pane title), `summary.yaml` (current-state snapshot), `knowledge.md` (`feedback: true`; knowledge candidates with evidence and confidence; writes nothing when there are none), `turn-log.json` (an append-only script item).
+Shipped examples (`examples/items/`): `title.md` (pane title), `summary.yaml` (current-state snapshot), `knowledge.md` (knowledge candidates with evidence and confidence; writes nothing when there are none), `review.md` (optional `feedback: true` advisory item), `turn-log.json` (an append-only script item).
 
 Runner choice per item: item `runner` → config `runner` → `pi` (the default runner). The runner is independent from the agent adapter: the Pi adapter reads the session transcript, while the selected runner performs the side work.
 

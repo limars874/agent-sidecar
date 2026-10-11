@@ -57,14 +57,14 @@ Expected: two `"status":"ok"` runs whose `model` is the session's model, a title
 
 This check requires a local core NATS server and an authenticated URL if the server requires credentials. Keep the URL only in the throwaway config; never commit credentials.
 
-1. Create a throwaway `AGENT_SIDECAR_HOME`, copy `examples/items/knowledge.md`, and set `feedback.natsUrl` in its config. Keep only one small `feedback: true` item enabled.
+1. Create a throwaway `AGENT_SIDECAR_HOME`, copy `examples/items/review.md` (or add `feedback: true` to one test item), and set `feedback.natsUrl` in its config. Keep only one small feedback item enabled.
 2. Start an interactive Pi session with the adapter package loaded and send enough turns for the item to run.
 3. Confirm `runs.jsonl` contains `status: "ok"` with any transport warning separate from the item status, and ask the same Pi session what feedback it received. Verify that the message is advisory, arrives without an automatically triggered idle turn, and does not create a second sidecar event.
 4. Stop/restart NATS and repeat once: Pi remains usable, the item output/checkpoint still completes, and a bounded feedback warning is recorded.
 
 The repository's automated tests cover the same routing and delivery decisions with mocks; this real smoke test is the required network/lifecycle check.
 
-A Pi 0.84.4 API probe also verified the delivery contract: `sendMessage(..., { deliverAs: "steer" })` was accepted while `ctx.isIdle()` was `false` and persisted a custom message without interrupting the in-flight request; `nextTurn` was accepted while idle and did not start an automatic turn; a subsequent user prompt received it. A separate `newSession()` probe observed `session_shutdown` for the old id, then `session_start` and `withSession` for a distinct new id, so session-scoped routes must be recreated and stale messages dropped.
+A Pi 0.84.4 API probe also verified the delivery contract: `sendMessage(..., { deliverAs: "steer" })` was accepted while `ctx.isIdle()` was `false` and persisted a custom message without interrupting the in-flight request; `nextTurn` was accepted while idle and did not start an automatic turn; a subsequent user prompt received it. A separate `newSession()` probe observed `session_shutdown` for the old id, then `session_start` and `withSession` for a distinct new id, so session-scoped routes must be recreated and stale messages dropped. A real temporary NATS server was stopped and restarted; the existing subscription received a message after the client automatically reconnected, confirming subscription recovery rather than only terminal-close/recreate behavior.
 
 Manual runner over an existing session file:
 
