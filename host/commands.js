@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ADAPTERS, getAdapter } from '../adapters/index.js';
 import { loadConfig } from '../core/config.js';
+import { publishFeedback } from '../core/feedback.js';
 import { validateEvent } from '../core/event.js';
 import { loadItems } from '../core/items.js';
 import { ensureSessionMetadata } from '../core/outputs.js';
@@ -40,7 +41,7 @@ function prepareSessionMetadata(root, event, sessionContext, dir) {
 }
 
 // `agent-sidecar event`: decide what is due, record it, hand it to a detached worker.
-export function handleEvent(rawEvent, { root, env, foreground = false }) {
+export async function handleEvent(rawEvent, { root, env, foreground = false, feedbackConnect }) {
   const event = validateEvent(rawEvent, Object.keys(ADAPTERS));
   const adapter = getAdapter(event.agent);
   const dir = sessionDir(root, event.agent, event.session);
@@ -63,7 +64,7 @@ export function handleEvent(rawEvent, { root, env, foreground = false }) {
   log(dir, `job ${job} turn ${turn}: ${due.map((d) => d.name).join(', ')}`);
 
   if (foreground) {
-    work(jobFile, { root, env });
+    await work(jobFile, { root, env, feedbackConnect });
   } else {
     const out = fs.openSync(path.join(dir, LOG_FILE), 'a');
     spawn(process.execPath, [BIN_PATH, 'work', jobFile], { detached: true, stdio: ['ignore', out, out], env }).unref();
@@ -73,7 +74,7 @@ export function handleEvent(rawEvent, { root, env, foreground = false }) {
 }
 
 // `agent-sidecar work <job>` (internal): run a job's items one after another.
-export function work(jobFile, { root, env }) {
+export async function work(jobFile, { root, env, feedbackConnect }) {
   const job = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
   const { event } = job;
   const dir = sessionDir(root, event.agent, event.session);
@@ -120,8 +121,20 @@ export function work(jobFile, { root, env }) {
         now: new Date(),
         sessionContext,
       });
-      Object.assign(record, { status: 'ok', runner: runnerName, model: r.model, effort: r.effort, written: r.output.written, warnings: r.output.warnings });
-      for (const w of r.output.warnings) log(dir, `${d.name}: ${w}`);
+      const warnings = [...r.output.warnings];
+      if (item.feedback) {
+        const feedback = await publishFeedback({
+          item,
+          event,
+          content: r.text,
+          sourceTurn: d.toTurn,
+          config,
+          connect: feedbackConnect,
+        });
+        if (feedback.warning) warnings.push(feedback.warning);
+      }
+      Object.assign(record, { status: 'ok', runner: runnerName, model: r.model, effort: r.effort, written: r.output.written, warnings });
+      for (const w of warnings) log(dir, `${d.name}: ${w}`);
     } catch (err) {
       Object.assign(record, { status: 'error', error: err.message });
       log(dir, `${d.name}: ${err.message}`);

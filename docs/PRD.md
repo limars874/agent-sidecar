@@ -43,6 +43,12 @@ One developer running agent sessions (initially Pi) in terminals or Herdr panes,
 | R19 | Make scheduled execution semantics explicit. | At-least-once delivery: replace snapshots are usually repeat-safe; append logs may duplicate after a crash window. |
 | R20 | Group session outputs by the original creation month. | `{sessionMonth}` is derived from the session header timestamp in UTC and remains stable across retries and later writes. |
 | R21 | Record stable session metadata once. | Canonical `out/{agent}/{sessionMonth}/{session}/metadata.json`, created on the first valid session event, exclusively and never overwritten. |
+| R22 | Let selected items send useful results back to the originating live Pi session. | `feedback: true` plus global `feedback.natsUrl`; output and checkpoint behavior remain independent. |
+| R23 | Route feedback to the exact live Pi process, not merely a session id. | The extension creates an ephemeral `instanceId` and private `replySubject`, subscribes before events, and carries the route through the job. |
+| R24 | Keep feedback bounded and untrusted. | Versioned JSON envelope, maximum 16 KiB payload / 4 KiB content, strict UTF-8 and envelope validation; Pi treats content as advisory. |
+| R25 | Deliver feedback without interrupting an in-flight model call or waking an idle agent. | Active Pi sessions use `sendMessage(..., { deliverAs: "steer" })`; idle sessions use `nextTurn` without `triggerTurn`. |
+| R26 | Keep the existing sidecar reliable when feedback is unavailable. | Bounded NATS connect/flush, warnings only on transport failure, no checkpoint rollback, no retry queue or persistence. |
+| R27 | Tie the feedback connection to the Pi session lifecycle. | Start after `session_start`, reconnect with bounded backoff, close on `session_shutdown`, and suppress in disabled/child processes. |
 
 ## Non-goals (v1)
 
@@ -50,11 +56,11 @@ One developer running agent sessions (initially Pi) in terminals or Herdr panes,
 - Writing directly into a knowledge base: knowledge output is candidates in files, reviewed by a person.
 - Running items at session end, on compaction, or on a timer; only every N turns.
 - A per-project items directory; there is one global directory.
-- Exactly-once delivery, transactional output, automatic migration of old output paths, retry backoff, attempt limits, a daemon, or a UI beyond titles.
+- Exactly-once delivery, transactional output, automatic migration of old output paths, feedback persistence/outbox, JetStream, RPC, feedback retry-to-resend, scheduled-item attempt limits, a sidecar-owned daemon, or a UI beyond titles.
 
 ## Success criteria
 
 - With the example items installed, a Pi session in Herdr gets a pane title after 2 turns, `summary.md` is replaced with the current snapshot every 3 turns, and `knowledge.md` gets candidates (or nothing) every 5 turns.
 - The main Pi session never waits for side work: the extension only starts a process.
 - An invalid item file never stops other items, and its error is visible in `agent-sidecar items` and `sidecar.log`.
-- All behaviour above is covered by `npm test` without network access.
+- All core behavior above is covered by `npm test` without network access; a separate manual smoke test covers one real Pi + local NATS path.

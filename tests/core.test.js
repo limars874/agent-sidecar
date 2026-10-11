@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { validateEvent } from '../core/event.js';
+import { publishFeedback, validateFeedbackEnvelope } from '../core/feedback.js';
 import { applyOutput, cleanTitle, ensureSessionMetadata, expandPathTemplate } from '../core/outputs.js';
 import { safeSegment, sessionOutputDir } from '../core/paths.js';
 import { fillPrompt, renderContext, resolveEffort, resolveModel, runItem } from '../core/runner.js';
@@ -89,6 +90,65 @@ test('event validation', () => {
   assert.throws(() => validateEvent({ ...ok, session: '' }, ['pi']), /session/);
   assert.throws(() => validateEvent({ ...ok, turn: -1 }, ['pi']), /turn/);
   assert.throws(() => validateEvent({ ...ok, model: 3 }, ['pi']), /model/);
+});
+
+test('feedback route is optional and validated against the session', () => {
+  const route = { v: 1, instanceId: 'instance-a', replySubject: '_INBOX.route-a', session: 's' };
+  assert.deepEqual(validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', feedbackRoute: route }, ['pi']).feedbackRoute, route);
+  assert.throws(() => validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', feedbackRoute: { ...route, session: 'other' } }, ['pi']), /match event.session/);
+  assert.throws(() => validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', feedbackRoute: { ...route, replySubject: '_INBOX.*' } }, ['pi']), /concrete NATS subject/);
+});
+
+test('feedback envelope is bounded and publisher flushes through the injected NATS client', async () => {
+  const route = { v: 1, instanceId: 'instance-a', replySubject: '_INBOX.route-a', session: 's' };
+  const event = { agent: 'pi', session: 's', turn: 4, feedbackRoute: route };
+  const item = { name: 'review', feedback: true };
+  const published = [];
+  let flushed = 0;
+  let closed = 0;
+  const result = await publishFeedback({
+    item,
+    event,
+    content: 'Use the documented API.',
+    sourceTurn: 4,
+    config: { feedback: { natsUrl: 'nats://user:pass@127.0.0.1:14222' } },
+    now: new Date('2026-10-11T09:00:00.000Z'),
+    connect: async (options) => {
+      assert.equal(options.servers, 'nats://127.0.0.1:14222');
+      assert.equal(options.user, 'user');
+      assert.equal(options.pass, 'pass');
+      return {
+        publish(subject, payload) { published.push({ subject, payload: new TextDecoder().decode(payload) }); },
+        async flush() { flushed += 1; },
+        async close() { closed += 1; },
+      };
+    },
+  });
+  assert.equal(result.published, true);
+  assert.equal(published[0].subject, route.replySubject);
+  const envelope = JSON.parse(published[0].payload);
+  assert.deepEqual(validateFeedbackEnvelope(envelope), envelope);
+  assert.equal(envelope.item, 'review');
+  assert.equal(envelope.sourceTurn, 4);
+  assert.equal(envelope.content, 'Use the documented API.');
+  assert.throws(() => validateFeedbackEnvelope({ ...envelope, content: 'x'.repeat(4097) }), /too (large|long)/);
+  assert.equal(flushed, 1);
+  assert.equal(closed, 1);
+
+  const skipped = await publishFeedback({ item, event, content: '   ', config: { feedback: { natsUrl: 'nats://127.0.0.1:4222' } }, connect: async () => { throw new Error('must not connect'); } });
+  assert.deepEqual(skipped, { published: false, warning: null });
+});
+
+test('feedback transport failures return warnings without failing the item', async () => {
+  const result = await publishFeedback({
+    item: { name: 'review', feedback: true },
+    event: { agent: 'pi', session: 's', turn: 1, feedbackRoute: { v: 1, instanceId: 'i', replySubject: '_INBOX.x', session: 's' } },
+    content: 'Finding',
+    config: { feedback: { natsUrl: 'nats://127.0.0.1:4222' } },
+    connect: async () => { throw new Error('broker unavailable'); },
+  });
+  assert.equal(result.published, false);
+  assert.match(result.warning, /feedback publish failed: broker unavailable/);
 });
 
 test('model priority: item, then global, then session', () => {

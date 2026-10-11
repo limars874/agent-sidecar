@@ -83,19 +83,25 @@ test('pi -p call: bare child, prompt on stdin, model passed, guard env set', (t)
 });
 
 // Minimal stand-ins for Pi's extension API and context.
-function fakePi() {
+function fakePi(messages = []) {
   const handlers = {};
-  return { handlers, on: (name, fn) => void (handlers[name] = fn) };
+  return {
+    handlers,
+    messages,
+    on: (name, fn) => void (handlers[name] = fn),
+    sendMessage: (...args) => messages.push(args),
+  };
 }
 
-function fakeCtx({ file = PI_SESSION, titles = [] } = {}) {
+function fakeCtx({ file = PI_SESSION, titles = [], sessionId = PI_SESSION_ID } = {}) {
   return {
     hasUI: true,
+    isIdle: () => true,
     model: { provider: 'anthropic', id: 'claude-x' },
     ui: { setTitle: (t) => titles.push(t), notify: () => {} },
     sessionManager: {
       getSessionFile: () => file,
-      getSessionId: () => PI_SESSION_ID,
+      getSessionId: () => sessionId,
       getBranch: () => [
         { type: 'message', message: { role: 'user' } },
         { type: 'message', message: { role: 'assistant' } },
@@ -140,6 +146,172 @@ test('extension: agent_settled reaches the CLI host, which runs the item through
   assert.equal(runs.status, 'ok');
   assert.equal(runs.model, 'anthropic/claude-x', 'session model used when nothing else is set');
   assert.equal(box.piCalls().length, 1, 'the aborted run reported nothing');
+});
+
+test('extension: routes feedback to the active session and selects idle delivery', async (t) => {
+  const box = sandbox(t);
+  box.item('review.yaml', 'everyTurns: 1\nfeedback: true\nprompt: Review\noutput: none\n');
+  const messages = [];
+  const subscriptions = [];
+  let nextMessage;
+  let resolveClosed;
+  const closed = new Promise((resolve) => { resolveClosed = resolve; });
+  const connection = {
+    subscribe(subject) {
+      const subscription = {
+        subject,
+        unsubscribe() { nextMessage?.({ value: undefined, done: true }); },
+        [Symbol.asyncIterator]() { return this; },
+        next() { return new Promise((resolve) => { nextMessage = resolve; }); },
+      };
+      subscriptions.push(subscription);
+      return subscription;
+    },
+    closed: () => closed,
+    async close() { resolveClosed(); },
+  };
+  const route = { v: 1, instanceId: 'instance-a', replySubject: '_INBOX.route-a', session: PI_SESSION_ID };
+  const pi = fakePi(messages);
+  createExtension(box.env, {
+    connectNats: async (options) => {
+      assert.equal(options.servers, 'nats://127.0.0.1:4222');
+      return connection;
+    },
+    createFeedbackRoute: () => route,
+  })(pi);
+  const ctx = fakeCtx();
+  await pi.handlers.session_start({}, ctx);
+  t.after(() => pi.handlers.session_shutdown({}));
+  await waitFor(() => subscriptions.length === 1 && typeof nextMessage === 'function');
+
+  nextMessage({ value: { data: Uint8Array.from([0xc3, 0x28]) }, done: false });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(messages.length, 0);
+  await waitFor(() => typeof nextMessage === 'function');
+  nextMessage({ value: { data: new Uint8Array(16 * 1024 + 1) }, done: false });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(messages.length, 0);
+  await waitFor(() => typeof nextMessage === 'function');
+
+  nextMessage({ value: { data: new TextEncoder().encode(JSON.stringify({
+    v: 1,
+    type: 'feedback',
+    id: 'message-1',
+    instanceId: route.instanceId,
+    agent: 'pi',
+    session: PI_SESSION_ID,
+    item: 'review',
+    sourceTurn: 2,
+    createdAt: '2026-10-11T09:00:00.000Z',
+    content: 'Check the retry path.',
+  })) }, done: false });
+  await waitFor(() => messages.length === 1);
+  assert.equal(messages[0][1].deliverAs, 'nextTurn');
+  assert.match(messages[0][0].content, /Check the retry path/);
+
+  ctx.isIdle = () => false;
+  await waitFor(() => typeof nextMessage === 'function');
+  nextMessage({ value: { data: new TextEncoder().encode(JSON.stringify({
+    v: 1,
+    type: 'feedback',
+    id: 'message-2',
+    instanceId: route.instanceId,
+    agent: 'pi',
+    session: PI_SESSION_ID,
+    item: 'review',
+    sourceTurn: 3,
+    createdAt: '2026-10-11T09:00:01.000Z',
+    content: 'Continue without interrupting the current call.',
+  })) }, done: false });
+  await waitFor(() => messages.length === 2);
+  assert.equal(messages[1][1].deliverAs, 'steer');
+});
+
+test('extension: preserves the feedback route across distinct Pi hook contexts', async (t) => {
+  const box = sandbox(t);
+  box.item('review.yaml', 'everyTurns: 1\nfeedback: true\nprompt: Review\noutput: none\n');
+  const subscriptions = [];
+  let resolveClosed;
+  const closed = new Promise((resolve) => { resolveClosed = resolve; });
+  const connection = {
+    subscribe(subject) {
+      const subscription = {
+        subject,
+        unsubscribe() {},
+        [Symbol.asyncIterator]() { return this; },
+        next() { return new Promise(() => {}); },
+      };
+      subscriptions.push(subscription);
+      return subscription;
+    },
+    closed: () => closed,
+    async close() { resolveClosed(); },
+  };
+  const emitted = [];
+  const route = { v: 1, instanceId: 'instance-b', replySubject: '_INBOX.route-b', session: PI_SESSION_ID };
+  const pi = fakePi();
+  createExtension(box.env, {
+    connectNats: async () => connection,
+    createFeedbackRoute: () => route,
+    spawn: (_command, args) => {
+      emitted.push(JSON.parse(args[args.indexOf('--json') + 1]));
+      return { on() {}, unref() {} };
+    },
+  })(pi);
+  await pi.handlers.session_start({}, fakeCtx());
+  t.after(() => pi.handlers.session_shutdown({}));
+  await waitFor(() => subscriptions.length === 1);
+  await pi.handlers.agent_settled({ aborted: false }, fakeCtx());
+  assert.deepEqual(emitted[0].feedbackRoute, route);
+});
+
+test('extension: drops feedback from the previous session after a switch', async (t) => {
+  const box = sandbox(t);
+  box.item('review.yaml', 'everyTurns: 1\nfeedback: true\nprompt: Review\noutput: none\n');
+  const messages = [];
+  const connections = [];
+  const routes = [
+    { v: 1, instanceId: 'instance-old', replySubject: '_INBOX.old', session: 'session-old' },
+    { v: 1, instanceId: 'instance-new', replySubject: '_INBOX.new', session: 'session-new' },
+  ];
+  const makeConnection = () => {
+    let resolveNext;
+    let resolveClosed;
+    const closed = new Promise((resolve) => { resolveClosed = resolve; });
+    const subscription = {
+      unsubscribe() { resolveNext?.({ value: undefined, done: true }); },
+      [Symbol.asyncIterator]() { return this; },
+      next() { return new Promise((resolve) => { resolveNext = resolve; }); },
+    };
+    return {
+      subscribe() { return subscription; },
+      closed: () => closed,
+      async close() { subscription.unsubscribe(); resolveClosed(); },
+      push(value) { resolveNext?.({ value: { data: new TextEncoder().encode(JSON.stringify(value)) }, done: false }); },
+    };
+  };
+  const pi = fakePi(messages);
+  createExtension(box.env, {
+    connectNats: async () => {
+      const connection = makeConnection();
+      connections.push(connection);
+      return connection;
+    },
+    createFeedbackRoute: () => routes.shift(),
+  })(pi);
+  await pi.handlers.session_start({}, fakeCtx({ sessionId: 'session-old' }));
+  t.after(() => pi.handlers.session_shutdown({}));
+  await waitFor(() => connections.length === 1);
+  await pi.handlers.session_shutdown({});
+  await pi.handlers.session_start({}, fakeCtx({ sessionId: 'session-new' }));
+  await waitFor(() => connections.length === 2);
+
+  connections[1].push({ v: 1, type: 'feedback', id: 'old-message', instanceId: 'instance-old', agent: 'pi', session: 'session-old', item: 'review', sourceTurn: 1, createdAt: '2026-10-11T09:00:00.000Z', content: 'old' });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(messages.length, 0);
+  connections[1].push({ v: 1, type: 'feedback', id: 'new-message', instanceId: 'instance-new', agent: 'pi', session: 'session-new', item: 'review', sourceTurn: 1, createdAt: '2026-10-11T09:00:01.000Z', content: 'new' });
+  await waitFor(() => messages.length === 1);
+  assert.match(messages[0][0].content, /new/);
 });
 
 test('extension: applies titles the CLI host writes', async (t) => {

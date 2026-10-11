@@ -17,6 +17,7 @@ test('markdown item: frontmatter settings, body is the prompt', () => {
   assert.equal(item.runner, null);
   assert.equal(item.model, null);
   assert.equal(item.effort, null);
+  assert.equal(item.feedback, false);
   assert.equal(item.dir, '/x');
 });
 
@@ -48,6 +49,7 @@ test('invalid items are rejected with a reason', () => {
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\nevery: 2', /unknown key "every"/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\nrunner: ""', /runner/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\neffort: ""', /effort/],
+    ['/x/a.yaml', 'everyTurns: 1\nprompt: a\nfeedback: yes', /feedback/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\ncontext: all', /context/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\ncontext:\n  scope: recent', /context.turns/],
     ['/x/a.yaml', 'everyTurns: 1\nprompt: a\ncontext:\n  scope: delta\n  turns: 2', /context.turns/],
@@ -92,16 +94,18 @@ test('config: defaults, overrides, and errors', (t) => {
   assert.equal(loadConfig(dir).runner, 'pi');
   assert.equal(loadConfig(dir).effort, null);
   assert.equal(loadConfig(dir).model, null);
+  assert.equal(loadConfig(dir).feedback.natsUrl, 'nats://127.0.0.1:4222');
   assert.deepEqual(loadConfig(dir).lifecycle, { clearTitleOnNew: true, clearTitleOnResume: true });
   fs.writeFileSync(
     path.join(dir, 'config.yaml'),
-    'runner: pi\neffort: high\nmodel: a/cheap\ntoolResultLines: 3\nlifecycle:\n  clearTitleOnNew: false\n  clearTitleOnResume: true\n',
+    'runner: pi\neffort: high\nmodel: a/cheap\ntoolResultLines: 3\nfeedback:\n  natsUrl: nats://127.0.0.1:14222\nlifecycle:\n  clearTitleOnNew: false\n  clearTitleOnResume: true\n',
   );
   const c = loadConfig(dir);
   assert.equal(c.runner, 'pi');
   assert.equal(c.effort, 'high');
   assert.equal(c.model, 'a/cheap');
   assert.equal(c.toolResultLines, 3);
+  assert.equal(c.feedback.natsUrl, 'nats://127.0.0.1:14222');
   assert.equal(c.timeoutMs, 120000);
   assert.deepEqual(c.lifecycle, { clearTitleOnNew: false, clearTitleOnResume: true });
   fs.writeFileSync(path.join(dir, 'config.yaml'), 'lifecycle:\n  clearTitleOnStart: false\n');
