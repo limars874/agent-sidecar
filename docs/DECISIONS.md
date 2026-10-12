@@ -26,7 +26,7 @@
 
 **D12 — Knowledge output is candidates, not knowledge.** Items append to files; nothing writes into a curated knowledge base. Review and promotion stay with a person.
 
-**D13 — Plain ESM JavaScript with small runtime dependencies.** Matches the user's other tools (tug), runs without a build step, and Pi loads `.js` extensions directly. `yaml` handles item/config parsing; the official `@nats-io/nats-core` and `@nats-io/transport-node` packages provide optional feedback transport without a broker-specific framework.
+**D13 — Plain ESM JavaScript with small runtime dependencies.** Matches the user's other tools (tug), runs without a build step, and Pi loads `.js` extensions directly. `yaml` handles item/config parsing; the official `@nats-io/nats-core`, `@nats-io/transport-node` and `@nats-io/jetstream` packages provide the optional NATS feedback and idle-handoff transports without a broker-specific framework.
 
 **D14 — Adapters and runners are separate.** An adapter reads the observed agent's session and reports its events; a runner performs one-shot model work. This lets a Pi session use a future Claude or Codex runner without replacing its Pi transcript adapter. The default runner remains `pi` for backward compatibility.
 
@@ -44,7 +44,9 @@
 
 **D21 — Defer session-rewind consistency.** Pi's `/tree` rewind can change the active conversation path without automatically rolling back sidecar checkpoints or outputs. This is a known P2 correctness limitation, not a reason to add branch-level state management in v1; revisit it when rewind becomes frequent in real use.
 
-**D22 — Feedback is best-effort NATS delivery, not a second output system.** An item opts in with `feedback: true`; the worker publishes a bounded advisory envelope only after a successful non-empty output. The Pi extension creates an ephemeral per-process route, validates `instanceId` and the current session, and uses `steer` while active or `nextTurn` while idle without triggering a turn. Broker failures warn but do not fail the item or roll back its checkpoint. V1 deliberately has no JetStream, persistence, outbox, RPC or resend queue.
+**D22 — Feedback is best-effort NATS delivery, not a second output system.** An item opts in with `feedback: true`; the worker publishes a bounded advisory envelope only after a successful non-empty output. The Pi extension creates an ephemeral per-process route, validates `instanceId` and the current session, and uses `steer` while active or `nextTurn` while idle without triggering a turn. Broker failures warn but do not fail the item or roll back its checkpoint. Feedback V1 deliberately has no JetStream, persistence, outbox, RPC or resend queue.
+
+**D23 — Idle handoff is an explicit, separate active-wake mode.** `idleHandoff.enabled` defaults to false. After each eligible normal work completion, NATS 2.15 JetStream schedules one delayed per-session check; later work cancels and rebuilds it. The per-session lock serializes cancel-and-replace with other work events, and a persisted `pending` plan retries with the same plan id after a crash. The Pi extension validates the original instance, session, work turn and progress id, then uses `steer` plus `triggerTurn: true` to wake exactly that idle agent. The handoff envelope and Pi custom message are distinct from Feedback V1. The agent decides whether to create or update a Handoff document, and may write nothing; the sidecar only tracks the check lifecycle. Handoff-triggered turns never count as normal work or re-arm the timer. There is no daemon, polling, terminal fallback, separate persistence/outbox or branch-specific handoff history.
 
 ## Known limitations
 
@@ -65,6 +67,7 @@
 - **Pi runner CLI flags.** The `pi -p` flags were taken from Pi's source on GitHub; a Pi older than those flags fails every model call with `Unknown option` (visible in `runs.jsonl`). MCP servers configured for Pi still start in the child.
 - **`AGENT_SIDECAR_NODE`.** Inside the Pi binary, `process.execPath` is Pi, not Node, so the extension starts the CLI with `node` from `PATH` (or `AGENT_SIDECAR_NODE`).
 - **Feedback is best-effort and advisory.** A broker restart, missing subscriber or process shutdown can lose a message; the file output and checkpoint are authoritative. Feedback content is not automatically trusted or persisted by Pi.
+- **Idle handoff requires NATS JetStream scheduling.** The enabled mode requires a compatible NATS 2.15+ server and the shared handoff stream; if scheduling, cancellation, consumer setup or delivery fails, the failure is explicit and no polling or fallback wake is attempted.
 
 ### Session rewind can desynchronize checkpoints and outputs
 

@@ -15,10 +15,20 @@ An adapter reports each finished turn of an agent session as one JSON object, pa
   "model": "anthropic/claude-sonnet-4-5",
   "pane": "w1:p4",
   "turn": 7,
+  "progressId": "latest-user-entry-id",
   "feedbackRoute": {
     "v": 1,
     "instanceId": "ephemeral-extension-instance",
     "replySubject": "_INBOX.…",
+    "session": "0199a3f2-…"
+  },
+  "handoffRoute": {
+    "v": 1,
+    "instanceId": "ephemeral-extension-instance",
+    "replySubject": "_INBOX.…",
+    "targetSubject": "agent-sidecar.handoff.target.…",
+    "scheduleSubject": "agent-sidecar.handoff.schedule.…",
+    "controlSubject": "agent-sidecar.handoff.control.…",
     "session": "0199a3f2-…"
   }
 }
@@ -33,11 +43,15 @@ An adapter reports each finished turn of an agent session as one JSON object, pa
 | `model` | string or null | no | The session's current model, passed to the selected runner (Pi: `provider/id`). Last fallback for model choice. |
 | `pane` | string or null | no | Herdr pane id when the agent runs inside Herdr (`$HERDR_PANE_ID`). Enables Herdr title updates. |
 | `turn` | integer ≥ 0 or null | no | Number of user turns on the session's active branch, including the one just finished. When missing, the CLI counts the turns in the transcript. |
+| `progressId` | string | no | Pi's latest user-entry id on the active branch. It prevents a same-count branch from being mistaken for the previous work batch. |
+| `activity` | `work` \| `handoff-triggered` \| `handoff` | no | Defaults to normal work. Handoff lifecycle events are internal and never schedule ordinary items or re-arm the idle timer. |
+| `handoffId` | string | no | Handoff plan id for `handoff-triggered` and `handoff` events. |
 | `feedbackRoute` | object | no | Ephemeral Pi delivery address for opted-in feedback. It contains `v: 1`, `instanceId`, `replySubject` and the matching `session`. Old events without it remain valid. The private subject is never written to normal logs. |
+| `handoffRoute` | object | no | Ephemeral Pi route used only when idle handoff is enabled. It contains `v: 1`, `instanceId`, `replySubject`, concrete `targetSubject`, `scheduleSubject`, `controlSubject` and the matching `session`. |
 
 **Turn**: one user prompt and everything the agent did for it, until the agent is fully idle again. Model calls inside tool loops are not separate turns. A turn ends when the agent has settled (Pi: `agent_settled`). Aborted runs (Esc) are not reported.
 
-**Idempotence**: reporting the same successfully completed `turn` twice schedules nothing the second time. If the first run failed, its `completedThrough` cursor is unchanged and a later event may retry the item.
+**Idempotence**: reporting the same successfully completed `turn` twice schedules nothing the second time. If the first run failed, its `completedThrough` cursor is unchanged and a later event may retry the item. Idle handoff uses `progressId` when available, so one normal work batch creates at most one delayed check; its trigger and completion events do not count as new work.
 
 ## 2. Adapters
 
@@ -201,13 +215,16 @@ Optional, in `<root>/config.yaml`, `config.yml` or `config.json` (only one may e
 | `timeoutMs` | `120000` | Limit per model call or script. |
 | `maxTranscriptChars` | `60000` | Size cap of `{{transcript}}`. |
 | `toolResultLines` | `20` | Lines kept per tool result. |
-| `feedback.natsUrl` | `nats://127.0.0.1:4222` | NATS server URL used only when at least one item opts into feedback. Credentials, when needed, may be supplied in the URL; keep the broker bound to localhost. |
+| `feedback.natsUrl` | `nats://127.0.0.1:4222` | NATS server URL used by feedback and idle handoff. Credentials, when needed, may be supplied in the URL; keep the broker bound to localhost. |
+| `idleHandoff.enabled` | `false` | Enable one automatic idle check after each new normal work batch. Disabled by default to avoid surprise model calls. |
+| `idleHandoff.after` | `60m` | Delay after the latest normal work completion. Supports positive `ms`, `s`, `m`, `h` and `d` values. |
+| `idleHandoff.prompt` | built-in prompt | Prompt injected into the idle Pi agent. The agent decides whether to write or update a Handoff document, and may write nothing. |
 | `lifecycle.clearTitleOnNew` | `true` | On Pi `session_start` with reason `new`, clear the pane label and the sidecar-owned Herdr metadata title. |
 | `lifecycle.clearTitleOnResume` | `true` | The same cleanup for reason `resume`. When enabled, Pi does not immediately restore the resumed session's saved terminal title. |
 
 The lifecycle settings are global behavior, not items: they do not call a model or consume turns. The Pi adapter applies them synchronously at session start. `clearTitle*` only clears titles owned by this sidecar plus the pane label; it does not remove other Herdr metadata sources.
 
-Feedback is opt-in per item. If no item has `feedback: true`, the Pi extension does not connect to NATS. Feedback is best-effort live delivery; the disk output and successful item checkpoint remain authoritative.
+Feedback is opt-in per item. Idle handoff is separately opt-in through `idleHandoff.enabled`. If neither is enabled, the Pi extension does not connect to NATS. Feedback and handoff are best-effort live transport; item output, checkpoints and handoff check state remain authoritative.
 
 ## 5. Outputs
 
@@ -238,6 +255,14 @@ For an item with `feedback: true`, the worker publishes only after the runner re
 
 The envelope is versioned JSON with `v: 1`, `type: "feedback"`, a unique `id`, `instanceId`, `agent`, `session`, `item`, `sourceTurn`, `createdAt` and short `content`. The envelope is limited to 16 KiB and content to 4 KiB of UTF-8. The subject selects the destination; the Pi extension validates the envelope and current session before calling Pi's `sendMessage()`. A successful NATS publish only means the broker accepted the message; it is not proof that the model received or acted on it.
 
+### 5.3 Idle handoff
+
+When `idleHandoff.enabled` is true, a normal Pi work event with at least one user turn creates one delayed JetStream schedule. The worker ensures the `AGENT_SIDECAR_HANDOFF` file stream exists with `allow_msg_schedules` and `allow_rollup_hdrs`, then publishes an `@at <RFC3339>` message to a per-instance schedule subject. A new work progress cancels the old schedule by publishing `Nats-Schedule-Next: purge` and `Nats-Scheduler: <old schedule subject>` on a separate control subject before creating the replacement; fixed-subject overwrite is not used.
+
+The Pi extension owns a per-instance push consumer filtered to the target subject and delivered to its private reply subject. It validates `instanceId`, `session`, `agent`, `workTurn` and `progressId`, drops stale or duplicate messages, and only wakes Pi when `ctx.isIdle()` is true. The wake is a custom `agent-sidecar-handoff` message delivered with `deliverAs: "steer"` and `triggerTurn: true`; it is not a feedback message and is the only V2 path that intentionally starts an idle model turn. Handoff lifecycle events are recorded as `handoff-triggered` and `handoff`; neither schedules items nor re-arms the timer.
+
+The handoff envelope is bounded to 16 KiB and carries `v`, `type: "idle-handoff"`, `id`, `instanceId`, `agent`, `session`, `planId`, `workTurn`, optional `progressId`, `createdAt` and `prompt`. `state.json` records `lastWork`, `plan`, `inFlight` and `lastCheck` separately. `lastCheck.completedAt` means the agent finished the check; `documentWritten: null` deliberately means sidecar does not claim to know whether the agent wrote a document. Plan publication is serialized with the session state lock; a `pending` plan is persisted before the bounded NATS call and retried with the same plan id after a crash. Transport or JetStream failures are explicit warnings and never fall back to polling, cron or terminal input injection.
+
 ## 6. Storage
 
 One tree for every agent. Root: `$AGENT_SIDECAR_HOME`, default `~/.agent-sidecar`.
@@ -259,12 +284,23 @@ One tree for every agent. Root: `$AGENT_SIDECAR_HOME`, default `~/.agent-sidecar
     sidecar.log                    errors, warnings, worker output
 ```
 
+NATS JetStream also owns one shared `AGENT_SIDECAR_HANDOFF` file stream with schedule, target and control subjects when idle handoff is enabled. Per-instance ephemeral consumers use a private reply subject and are removed on session shutdown when possible; the server-side inactivity threshold is the crash fallback.
+
 `state.json`:
 
 ```json
-{ "v": 1, "items": { "summary": { "lastTurn": 6, "scheduledThrough": 6, "completedThrough": 6,
+{ "v": 1,
+  "items": { "summary": { "lastTurn": 6, "scheduledThrough": 6, "completedThrough": 6,
     "running": { "job": "1791…-a1b2c3", "pid": 4242, "since": "2026-10-09T10:00:00.000Z" },
-    "lastRun": { "at": "…", "status": "ok", "fromTurn": 3, "toTurn": 6 } } } }
+    "lastRun": { "at": "…", "status": "ok", "fromTurn": 3, "toTurn": 6 } } },
+  "idleHandoff": {
+    "lastWork": { "turn": 7, "progressId": "latest-user-entry-id" },
+    "plan": { "id": "…", "status": "scheduled", "deadline": "…", "work": { "turn": 7, "progressId": "…" }, "previousPlan": null },
+    "inFlight": null,
+    "lastCheck": null,
+    "scheduleError": null
+  }
+}
 ```
 
 - `scheduledThrough` is the furthest turn reserved by a job; it prevents duplicate scheduling while the job is live.
@@ -273,6 +309,7 @@ One tree for every agent. Root: `$AGENT_SIDECAR_HOME`, default `~/.agent-sidecar
 - `running` is set while a job for the item is pending or running. Another event skips the item until it is cleared, unless it is stale: the recorded pid is dead, or it is older than 30 minutes.
 - If `turn` is ever lower than `completedThrough` (Pi `/tree` or a shorter branch), the completion cursor is reset to `turn`.
 - The lock is a file created with `O_EXCL` holding the owner's pid. It is taken over when that pid is dead; malformed lock files may be taken over after 30 s, while a live owner's lock is never stolen solely because it is old. Waiting for it gives up after 10 s.
+- `idleHandoff.lastWork` identifies the latest normal work batch. `plan` is the delayed schedule, `inFlight` is a delivered check, and `lastCheck` is the completed check. A plan's `previousPlan` retains the old schedule subject/id until replacement publication completes, so a crash can retry cancellation. Handoff state is independent of item cursors.
 
 `runs.jsonl` lines: `{ at, job, item, fromTurn, toTurn, status: "ok"|"error", runner?, effort?, model?, written?, warnings?, error?, ms }`.
 
@@ -280,7 +317,7 @@ One tree for every agent. Root: `$AGENT_SIDECAR_HOME`, default `~/.agent-sidecar
 
 | Command | Effect | Output |
 |---|---|---|
-| `agent-sidecar event [--json <event>] [--foreground]` | Validate the event, lock the session, schedule due items, write the job, start a detached `work` process (or run it in this process with `--foreground`). Returns quickly. | `{ job, turn, scheduled: [names], skipped: [{name, reason}] }` |
+| `agent-sidecar event [--json <event>] [--foreground]` | Validate the event, lock the session, schedule due items and/or an idle handoff, write the job, start a detached `work` process (or run it in this process with `--foreground`). Returns quickly. | `{ job, turn, scheduled: [names], skipped: [{name, reason}], handoff? }` |
 | `agent-sidecar run <item> --agent <a> --session <ref> [--model <m>] [--pane <id>] [--from-turn <n>] [--to-turn <n>] [--dry-run]` | Run one item now over a transcript, ignoring `everyTurns`. Does not move cursors or mark anything running. Range defaults: `context: session` → `0..last`; `delta` → `cursor..last`. `--model` stands in for the session model; without it, the model recorded in the transcript is used. `--dry-run` prints the prompt instead of calling the model. | `{ item, runner, effort, model, fromTurn, toTurn, text, output }` or `{ …, prompt }` |
 | `agent-sidecar items` | Load and check all items. | One JSON line per valid item; errors on stderr |
 | `agent-sidecar work <job-file>` | Internal: run a scheduled job. | JSON array of run records |

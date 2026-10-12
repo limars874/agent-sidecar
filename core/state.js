@@ -38,7 +38,33 @@ export function updateState(dir, fn) {
   });
 }
 
+export async function updateStateAsync(dir, fn) {
+  return withLockAsync(dir, async () => {
+    const result = await fn(readState(dir));
+    writeState(dir, result.state);
+    return result;
+  });
+}
+
 export function withLock(dir, fn) {
+  const release = acquireLock(dir);
+  try {
+    return fn();
+  } finally {
+    release();
+  }
+}
+
+export async function withLockAsync(dir, fn) {
+  const release = await acquireLockAsync(dir);
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+function acquireLock(dir) {
   fs.mkdirSync(dir, { recursive: true });
   const lock = path.join(dir, 'lock');
   const deadline = Date.now() + LOCK_WAIT_MS;
@@ -56,11 +82,28 @@ export function withLock(dir, fn) {
       sleep(25);
     }
   }
-  try {
-    return fn();
-  } finally {
-    fs.rmSync(lock, { force: true });
+  return () => fs.rmSync(lock, { force: true });
+}
+
+async function acquireLockAsync(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  const lock = path.join(dir, 'lock');
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+      break;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      if (lockIsStale(lock)) {
+        fs.rmSync(lock, { force: true });
+        continue;
+      }
+      if (Date.now() > deadline) throw new Error(`timed out waiting for lock ${lock}`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
   }
+  return () => fs.rmSync(lock, { force: true });
 }
 
 function lockIsStale(lock) {

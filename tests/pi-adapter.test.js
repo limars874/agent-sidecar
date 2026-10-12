@@ -317,6 +317,140 @@ test('extension: drops feedback from the previous session after a switch', async
   assert.match(messages[0][0].content, /new/);
 });
 
+test('extension: delivers an idle handoff with an active Pi wake', async (t) => {
+  const box = sandbox(t);
+  box.config('idleHandoff:\n  enabled: true\n  after: 1m\n  prompt: Check whether a handoff is needed\n');
+  const messages = [];
+  const subscriptions = [];
+  let nextMessage;
+  const connection = {
+    subscribe(subject) {
+      const subscription = {
+        subject,
+        unsubscribe() { nextMessage?.({ value: undefined, done: true }); },
+        [Symbol.asyncIterator]() { return this; },
+        next() { return new Promise((resolve) => { nextMessage = resolve; }); },
+      };
+      subscriptions.push(subscription);
+      return subscription;
+    },
+    closed: () => new Promise(() => {}),
+    async close() {},
+  };
+  const route = {
+    v: 1,
+    instanceId: 'instance-handoff',
+    replySubject: '_INBOX.handoff',
+    targetSubject: 'agent-sidecar.handoff.target.instance-handoff',
+    scheduleSubject: 'agent-sidecar.handoff.schedule.instance-handoff',
+    controlSubject: 'agent-sidecar.handoff.control.instance-handoff',
+    session: PI_SESSION_ID,
+  };
+  const manager = {
+    streams: {
+      async info() {
+        return { config: { subjects: ['agent-sidecar.handoff.>'], allow_msg_schedules: true, allow_rollup_hdrs: true } };
+      },
+    },
+    consumers: {
+      async info() {
+        return { config: { ack_policy: 'none', deliver_subject: route.replySubject, filter_subject: route.targetSubject } };
+      },
+      async delete() {},
+    },
+  };
+  const emitted = [];
+  const pi = fakePi(messages);
+  pi.appendEntry = () => {};
+  createExtension(box.env, {
+    connectNats: async () => connection,
+    jetstreamManager: async () => manager,
+    createHandoffRoute: () => route,
+    spawn: (_command, args) => {
+      emitted.push(JSON.parse(args[args.indexOf('--json') + 1]));
+      return { on() {}, unref() {} };
+    },
+  })(pi);
+  const ctx = fakeCtx();
+  await pi.handlers.session_start({}, ctx);
+  t.after(() => pi.handlers.session_shutdown({}));
+  await waitFor(() => subscriptions.length === 1 && typeof nextMessage === 'function');
+
+  nextMessage({ value: { data: new TextEncoder().encode(JSON.stringify({
+    v: 1,
+    type: 'idle-handoff',
+    id: 'delivery-1',
+    instanceId: route.instanceId,
+    agent: 'pi',
+    session: PI_SESSION_ID,
+    planId: 'plan-1',
+    workTurn: 2,
+    progressId: null,
+    createdAt: '2026-10-12T12:00:00.000Z',
+    prompt: 'Check whether a handoff is needed',
+  })) }, done: false });
+  await waitFor(() => messages.length === 1);
+  assert.equal(messages[0][0].customType, 'agent-sidecar-handoff');
+  assert.equal(messages[0][1].deliverAs, 'steer');
+  assert.equal(messages[0][1].triggerTurn, true);
+  assert.equal(emitted[0].activity, 'handoff-triggered');
+
+  await pi.handlers.agent_settled({ aborted: true }, ctx);
+  assert.equal(emitted.length, 1, 'an aborted handoff must not be marked completed');
+  await pi.handlers.agent_settled({ aborted: false }, ctx);
+  assert.equal(emitted[1].activity, 'handoff');
+  assert.equal(emitted[1].handoffId, 'plan-1');
+});
+
+test('extension: keeps Feedback V1 when idle-handoff JetStream setup fails', async (t) => {
+  const box = sandbox(t);
+  box.item('review.yaml', 'everyTurns: 1\nfeedback: true\nprompt: Review\noutput: none\n');
+  box.config('idleHandoff:\n  enabled: true\n  after: 1m\n');
+  const subscriptions = [];
+  let closed = 0;
+  const connection = {
+    subscribe(subject) {
+      subscriptions.push(subject);
+      return {
+        unsubscribe() {},
+        [Symbol.asyncIterator]() { return this; },
+        next() { return new Promise(() => {}); },
+      };
+    },
+    closed: () => new Promise(() => {}),
+    async close() { closed += 1; },
+  };
+  const feedbackRoute = { v: 1, instanceId: 'feedback-instance', replySubject: '_INBOX.feedback', session: PI_SESSION_ID };
+  const handoffRoute = {
+    v: 1,
+    instanceId: 'handoff-instance',
+    replySubject: '_INBOX.handoff',
+    targetSubject: 'agent-sidecar.handoff.target.handoff-instance',
+    scheduleSubject: 'agent-sidecar.handoff.schedule.handoff-instance',
+    controlSubject: 'agent-sidecar.handoff.control.handoff-instance',
+    session: PI_SESSION_ID,
+  };
+  const manager = {
+    streams: {
+      async info() { throw new Error('stream unavailable'); },
+      async add() { throw new Error('permission denied'); },
+    },
+    consumers: { async delete() {} },
+  };
+  const pi = fakePi();
+  createExtension(box.env, {
+    connectNats: async () => connection,
+    createFeedbackRoute: () => feedbackRoute,
+    createHandoffRoute: () => handoffRoute,
+    jetstreamManager: async () => manager,
+  })(pi);
+  await pi.handlers.session_start({}, fakeCtx());
+  t.after(() => pi.handlers.session_shutdown({}));
+  await waitFor(() => subscriptions.length === 1);
+  assert.equal(subscriptions[0], feedbackRoute.replySubject);
+  assert.equal(closed, 0, 'feedback connection remains available after handoff setup failure');
+});
+
 test('extension: applies titles the CLI host writes', async (t) => {
   const box = sandbox(t);
   const titles = [];
