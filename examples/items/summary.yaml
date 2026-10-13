@@ -10,7 +10,7 @@ output:
   file: out/{agent}/{sessionMonth}/{session}/summary.md
   mode: replace
 prompt: |
-  You maintain a compact, accurate CURRENT-STATE HANDOFF for an ongoing coding session.
+  You maintain a compact, accurate CURRENT-STATE SUMMARY for an ongoing coding session.
   The context below may contain an earlier summary snapshot plus newly observed transcript messages.
   Produce a COMPLETE REPLACEMENT snapshot, not an addendum or a chronological log.
 

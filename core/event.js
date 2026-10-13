@@ -1,6 +1,6 @@
 // The shared event (CONTRACT.md "Event"). Every adapter reports a finished
 // turn as one of these; nothing else crosses from an agent into the core.
-import { validateHandoffRoute } from './idle-handoff.js';
+import { validateIdleRoute } from './idle-prompt.js';
 
 export const EVENT_VERSION = 1;
 
@@ -36,13 +36,14 @@ export function validateEvent(raw, knownAgents) {
     throw new Error('progressId must be a non-empty string or null');
   }
   const activity = raw.activity ?? 'work';
-  if (!['work', 'handoff-triggered', 'handoff'].includes(activity)) {
-    throw new Error('activity must be "work", "handoff-triggered" or "handoff"');
+  if (!['work', 'idle-prompt-triggered', 'idle-prompt'].includes(activity)) {
+    throw new Error('activity must be "work", "idle-prompt-triggered" or "idle-prompt"');
   }
-  if ((activity === 'handoff-triggered' || activity === 'handoff') && (typeof raw.handoffId !== 'string' || raw.handoffId === '')) {
-    throw new Error('handoffId is required for handoff events');
+  const idlePromptId = raw.idlePromptId;
+  if ((activity === 'idle-prompt-triggered' || activity === 'idle-prompt') && (typeof idlePromptId !== 'string' || idlePromptId === '')) {
+    throw new Error('idlePromptId is required for idle prompt events');
   }
-  if (typeof raw.handoffId === 'string' && raw.handoffId.length > 256) throw new Error('handoffId is too long');
+  if (typeof idlePromptId === 'string' && idlePromptId.length > 256) throw new Error('idlePromptId is too long');
   const event = {
     v: EVENT_VERSION,
     agent: raw.agent,
@@ -54,10 +55,10 @@ export function validateEvent(raw, knownAgents) {
   };
   if (raw.progressId !== undefined && raw.progressId !== null) event.progressId = raw.progressId;
   if (raw.activity !== undefined) event.activity = activity;
-  if (raw.handoffId !== undefined && raw.handoffId !== null) event.handoffId = raw.handoffId;
+  if (idlePromptId !== undefined && idlePromptId !== null) event.idlePromptId = idlePromptId;
   const feedbackRoute = validateFeedbackRoute(raw.feedbackRoute, event.session);
   if (feedbackRoute) event.feedbackRoute = feedbackRoute;
-  const handoffRoute = validateHandoffRoute(raw.handoffRoute, event.session);
-  if (handoffRoute) event.handoffRoute = handoffRoute;
+  const idleRoute = validateIdleRoute(raw.idleRoute, event.session);
+  if (idleRoute) event.idleRoute = idleRoute;
   return event;
 }

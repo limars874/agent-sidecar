@@ -14,13 +14,13 @@ import { BIN_PATH, itemsDir, sessionDir } from '../core/paths.js';
 import { getSessionContext } from '../core/session.js';
 import { runItem } from '../core/runner.js';
 import {
-  completeIdleHandoff,
-  markIdleHandoffScheduleFailed,
-  markIdleHandoffScheduled,
-  markIdleHandoffTriggered,
-  planIdleHandoff,
-  publishIdleHandoffPlan,
-} from '../core/idle-handoff.js';
+  completeIdlePrompt,
+  markIdlePromptScheduleFailed,
+  markIdlePromptScheduled,
+  markIdlePromptTriggered,
+  planIdlePrompt,
+  publishIdlePromptPlan,
+} from '../core/idle-prompt.js';
 import { planEvent } from '../core/scheduler.js';
 import { getRunner, resolveRunnerName } from '../runners/index.js';
 import { appendLine, readState, runIsStale, updateState, updateStateAsync, writeJsonAtomic, writeState } from '../core/state.js';
@@ -48,31 +48,32 @@ function prepareSessionMetadata(root, event, sessionContext, dir) {
   }
 }
 
-function handleHandoffActivity(event, dir) {
-  if (event.activity === 'handoff-triggered') {
+function handleIdlePromptActivity(event, dir) {
+  if (event.activity === 'idle-prompt-triggered') {
     const result = updateState(dir, (state) => {
-      const marked = markIdleHandoffTriggered(state, { planId: event.handoffId });
+      const marked = markIdlePromptTriggered(state, { idlePromptId: event.idlePromptId });
       return { state: marked.state, matched: marked.matched };
     });
-    if (result.matched) log(dir, `idle handoff ${event.handoffId} triggered`);
-    return { job: null, turn: event.turn ?? null, scheduled: [], skipped: [], handoff: { status: 'triggered', matched: result.matched } };
+    if (result.matched) log(dir, `idle prompt ${event.idlePromptId} triggered`);
+    return { job: null, turn: event.turn ?? null, scheduled: [], skipped: [], idle: { status: 'triggered', matched: result.matched } };
   }
 
   const result = updateState(dir, (state) => {
-    const completed = completeIdleHandoff(state, { handoffId: event.handoffId });
+    const completed = completeIdlePrompt(state, { idlePromptId: event.idlePromptId });
     return { state: completed.state, matched: completed.matched, check: completed.check };
   });
-  if (result.matched) log(dir, `idle handoff ${event.handoffId} completed`);
-  return { job: null, turn: event.turn ?? null, scheduled: [], skipped: [], handoff: { status: 'completed', matched: result.matched } };
+  if (result.matched) log(dir, `idle prompt ${event.idlePromptId} completed`);
+  return { job: null, turn: event.turn ?? null, scheduled: [], skipped: [], idle: { status: 'completed', matched: result.matched } };
 }
 
 // `agent-sidecar event`: decide what is due, record it, hand it to a detached worker.
-export async function handleEvent(rawEvent, { root, env, foreground = false, feedbackConnect, handoffConnect, handoffManager } = {}) {
+export async function handleEvent(rawEvent, { root, env, foreground = false, feedbackConnect, idleConnect, idleManager } = {}) {
   const event = validateEvent(rawEvent, Object.keys(ADAPTERS));
   const dir = sessionDir(root, event.agent, event.session);
-  if ((event.activity ?? 'work') !== 'work') return handleHandoffActivity(event, dir);
+  if ((event.activity ?? 'work') !== 'work') return handleIdlePromptActivity(event, dir);
 
   const config = loadConfig(root);
+  for (const warning of config.warnings ?? []) log(dir, warning);
   const adapter = getAdapter(event.agent);
   const sessionInfo = adapter.readSessionInfo
     ? adapter.readSessionInfo(event.transcriptRef)
@@ -85,39 +86,39 @@ export async function handleEvent(rawEvent, { root, env, foreground = false, fee
   const job = `${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
   const planned = await updateStateAsync(dir, async (state) => {
     const itemPlan = planEvent({ items, state, turn, job, now: new Date().toISOString(), isStale: (r) => runIsStale(r) });
-    const handoffPlan = planIdleHandoff({ state: itemPlan.state, event, config });
-    let finalState = handoffPlan.state;
-    let handoff = null;
-    if (handoffPlan.action) {
+    const idlePlan = planIdlePrompt({ state: itemPlan.state, event, config });
+    let finalState = idlePlan.state;
+    let idle = null;
+    if (idlePlan.action) {
       // 在网络调用前先持久化 pending 计划；进程若在发布后退出，下一次事件会用同一个 msgID 重试，若在发布前退出，也不会丢失计划。
       writeState(dir, finalState);
-      const result = await publishIdleHandoffPlan({
+      const result = await publishIdlePromptPlan({
         config,
         event,
-        plan: handoffPlan.action.plan,
-        previousPlan: handoffPlan.action.previousPlan,
-        connect: handoffConnect,
-        manager: handoffManager,
+        plan: idlePlan.action.plan,
+        previousPlan: idlePlan.action.previousPlan,
+        connect: idleConnect,
+        manager: idleManager,
       });
-      handoff = { status: result.scheduled ? 'scheduled' : 'pending', warning: result.warning };
+      idle = { status: result.scheduled ? 'scheduled' : 'pending', warning: result.warning };
       finalState = result.scheduled
-        ? markIdleHandoffScheduled(finalState, handoffPlan.action.plan.id)
-        : markIdleHandoffScheduleFailed(finalState, handoffPlan.action.plan.id, result.warning);
+        ? markIdlePromptScheduled(finalState, idlePlan.action.plan.id)
+        : markIdlePromptScheduleFailed(finalState, idlePlan.action.plan.id, result.warning);
       if (result.warning) log(dir, result.warning);
-    } else if (config.idleHandoff.enabled && turn > 0 && !event.handoffRoute) {
-      handoff = { status: 'skipped', warning: 'idle handoff route unavailable' };
-      log(dir, handoff.warning);
+    } else if (config.idle.enabled && turn > 0 && !event.idleRoute) {
+      idle = { status: 'skipped', warning: 'idle route unavailable' };
+      log(dir, idle.warning);
     }
     return {
       state: finalState,
       due: itemPlan.due,
       skipped: itemPlan.skipped,
-      handoff,
+      idle,
     };
   });
-  const { due, skipped, handoff } = planned;
+  const { due, skipped, idle } = planned;
 
-  if (due.length === 0) return { job: null, turn, scheduled: [], skipped, handoff };
+  if (due.length === 0) return { job: null, turn, scheduled: [], skipped, idle };
 
   const jobFile = path.join(dir, 'jobs', `${job}.json`);
   writeJsonAtomic(jobFile, { v: 1, id: job, event: { ...event, turn }, items: due });
@@ -130,7 +131,7 @@ export async function handleEvent(rawEvent, { root, env, foreground = false, fee
     spawn(process.execPath, [BIN_PATH, 'work', jobFile], { detached: true, stdio: ['ignore', out, out], env }).unref();
     fs.closeSync(out);
   }
-  return { job, turn, scheduled: due.map((d) => d.name), skipped, handoff };
+  return { job, turn, scheduled: due.map((d) => d.name), skipped, idle };
 }
 
 // `agent-sidecar work <job>` (internal): run a job's items one after another.

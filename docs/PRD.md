@@ -49,28 +49,28 @@ One developer running agent sessions (initially Pi) in terminals or Herdr panes,
 | R25 | Deliver feedback without interrupting an in-flight model call or waking an idle agent. | Active Pi sessions use `sendMessage(..., { deliverAs: "steer" })`; idle sessions use `nextTurn` without `triggerTurn`. |
 | R26 | Keep the existing sidecar reliable when feedback is unavailable. | Bounded NATS connect/flush, warnings only on transport failure, no checkpoint rollback, no retry queue or persistence. |
 | R27 | Tie the feedback connection to the Pi session lifecycle. | Start after `session_start`, reconnect with bounded backoff, close on `session_shutdown`, and suppress in disabled/child processes. |
-| R28 | Add an opt-in idle handoff check without surprise calls. | `idleHandoff.enabled` defaults to `false`; `after` defaults to `60m`; the configured prompt is passed to the originating agent. |
-| R29 | Arm idle handoff only after real normal work. | A valid completed work turn establishes eligibility; each later normal work completion cancels and re-arms the previous plan. `agent_settled` alone is not new work. |
+| R28 | Add an opt-in generic idle prompt without surprise calls. | `idle.enabled` defaults to `false`; `after` defaults to `60m`; `idle.prompt` is the single task-content source, is required when enabled, and is passed through unchanged. |
+| R29 | Arm the idle prompt only after real normal work. | A valid completed work turn establishes eligibility; each later normal work completion cancels and re-arms the previous plan. `agent_settled` alone is not new work. |
 | R30 | Wake the exact originating agent at the deadline. | NATS JetStream delayed scheduling targets an ephemeral per-instance consumer; the Pi extension validates session, work turn and progress id before `steer` + `triggerTurn: true`. |
-| R31 | Let the agent decide whether a Handoff document is useful. | The wake is one judgment call; the agent may create/update a Handoff document or write nothing. The sidecar never fabricates the document. |
-| R32 | Prevent duplicate checks and self-trigger loops. | One work batch produces at most one check; `handoff-triggered` and `handoff` events never schedule items or re-arm idle handoff; later normal work re-arms eligibility. |
+| R31 | Keep prompt meaning outside the sidecar. | The sidecar delivers the configured text and does not inspect it, imply a document type, or fabricate an outcome. The agent receives one prompt turn and may do nothing. |
+| R32 | Prevent duplicate prompts and self-trigger loops. | One work batch produces at most one prompt; `idle-prompt-triggered` and `idle-prompt` events never schedule items or re-arm idle; later normal work re-arms eligibility. |
 | R33 | Use native NATS 2.15 JetStream scheduling with cancel-and-rebuild. | A shared file stream allows schedules; each plan has a distinct schedule subject, old plans are cancelled through a separate control subject before replacement, and retrying cancellation cannot purge the replacement; expiry re-validation and no polling or daemon fallback remain required. |
-| R34 | Track handoff lifecycle separately from item execution. | Per-session state records work progress, plan, in-flight check and completed check; it distinguishes check completion from whether a document was written, retains the same plan id across unknown publication results, and reports transport failures explicitly. |
-| R35 | Keep Feedback V1 semantics unchanged and distinguish message types. | Feedback remains advisory `nextTurn`/`steer` delivery without an idle wake; idle handoff uses a separate `idle-handoff` envelope and `agent-sidecar-handoff` Pi message. |
-| R36 | Verify idle handoff against the real environment. | Tests cover state, cancellation, unknown publication results, lifecycle reordering and routing with mocks; acceptance includes a real NATS 2.15 + Pi idle-wake smoke test. |
+| R34 | Track idle-prompt lifecycle separately from item execution. | Per-session state records work progress, plan, in-flight prompt turn and completed prompt turn, retains the same plan id across unknown publication results, and reports transport failures explicitly. |
+| R35 | Keep Feedback V1 semantics unchanged and distinguish message types. | Feedback remains advisory `nextTurn`/`steer` delivery without an idle wake; idle prompts use a separate `idle-prompt` envelope and `agent-sidecar-idle-prompt` Pi message. The old stream and subjects remain only as a safe transport migration boundary. |
+| R36 | Verify generic idle prompting against the real environment. | Tests cover state, cancellation, unknown publication results, lifecycle reordering and routing with mocks; acceptance includes a real NATS 2.15 + Pi idle-wake smoke using a non-document prompt such as `Reply IDLE_OK`. |
 
 ## Non-goals (v1)
 
 - Adapters for Claude Code, Codex, Grok CLI or others (the boundary is ready; none is implemented).
 - Writing directly into a knowledge base: knowledge output is candidates in files, reviewed by a person.
-- Running ordinary items at session end or on compaction; ordinary item scheduling remains every N turns. The separately opt-in idle-handoff inactivity check is the only timer-based wake.
+- Running ordinary items at session end or on compaction; ordinary item scheduling remains every N turns. The separately opt-in idle-prompt inactivity check is the only timer-based wake.
 - A per-project items directory; there is one global directory.
-- Exactly-once delivery, transactional output, automatic migration of old output paths, Feedback V1 persistence/outbox or retry-to-resend, RPC, scheduled-item attempt limits, a sidecar-owned daemon, polling/cron/terminal-key fallback, branch-specific handoff histories, or a UI beyond titles.
+- Exactly-once delivery, transactional output, automatic migration of old output paths, Feedback V1 persistence/outbox or retry-to-resend, RPC, scheduled-item attempt limits, a sidecar-owned daemon, polling/cron/terminal-key fallback, branch-specific idle-prompt histories, multiple delayed prompts, task chains, or a UI beyond titles.
 
 ## Success criteria
 
 - With the example items installed, a Pi session in Herdr gets a pane title after 2 turns, `summary.md` is replaced with the current snapshot every 3 turns, and `knowledge.md` gets candidates (or nothing) every 5 turns.
 - The main Pi session never waits for side work: the extension only starts a process.
 - An invalid item file never stops other items, and its error is visible in `agent-sidecar items` and `sidecar.log`.
-- With idle handoff enabled, one normal work batch creates one delayed check, a new batch replaces it, and a real idle Pi receives one active wake without scheduling a loop.
-- All core behavior above is covered by `npm test` without network access; separate manual smoke tests cover real Pi + local NATS feedback and idle handoff paths.
+- With idle prompting enabled, one normal work batch creates one delayed prompt, a new batch replaces it, and a real idle Pi receives one active wake without scheduling a loop.
+- All core behavior above is covered by `npm test` without network access; separate manual smoke tests cover real Pi + local NATS feedback and generic idle-prompt paths.

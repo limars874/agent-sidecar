@@ -16,13 +16,13 @@ import {
   validateFeedbackEnvelope,
 } from '../../core/feedback.js';
 import {
-  createHandoffRoute,
-  decodeHandoffMessage,
-  deleteHandoffConsumer,
-  ensureHandoffConsumer,
-  ensureHandoffStream,
-  HANDOFF_MAX_PAYLOAD_BYTES,
-} from '../../core/idle-handoff.js';
+  createIdleRoute,
+  decodeIdlePromptMessage,
+  deleteIdleConsumer,
+  ensureIdleConsumer,
+  ensureIdleStream,
+  IDLE_MAX_PAYLOAD_BYTES,
+} from '../../core/idle-prompt.js';
 import { loadConfig } from '../../core/config.js';
 import { itemsDir, rootDir, sessionDir } from '../../core/paths.js';
 
@@ -47,19 +47,19 @@ function currentTurnAndProgress(ctx) {
   };
 }
 
-function readCompletedHandoffIds(ctx) {
+function readCompletedIdlePromptIds(ctx) {
   const entries = ctx.sessionManager.getBranch?.() ?? ctx.sessionManager.getEntries?.() ?? [];
   return new Set(entries
-    .filter((entry) => entry?.type === 'custom' && entry.customType === 'agent-sidecar-handoff' && entry.data?.status === 'completed' && typeof entry.data.id === 'string')
+    .filter((entry) => entry?.type === 'custom' && entry.customType === 'agent-sidecar-idle-prompt' && entry.data?.status === 'completed' && typeof entry.data.id === 'string')
     .map((entry) => entry.data.id));
 }
 
-function readPendingHandoff(ctx) {
+function readPendingIdlePrompt(ctx) {
   const entries = ctx.sessionManager.getBranch?.() ?? ctx.sessionManager.getEntries?.() ?? [];
   const seenIds = new Set();
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
-    if (entry?.type !== 'custom' || entry.customType !== 'agent-sidecar-handoff') continue;
+    if (entry?.type !== 'custom' || entry.customType !== 'agent-sidecar-idle-prompt') continue;
     const data = entry.data ?? {};
     if (typeof data.id !== 'string' || data.id === '' || seenIds.has(data.id)) continue;
     seenIds.add(data.id);
@@ -71,11 +71,11 @@ function readPendingHandoff(ctx) {
   return null;
 }
 
-function appendHandoffMarker(pi, value) {
+function appendIdlePromptMarker(pi, value) {
   try {
-    pi.appendEntry('agent-sidecar-handoff', value);
+    pi.appendEntry('agent-sidecar-idle-prompt', value);
   } catch (err) {
-    console.warn(`agent-sidecar idle handoff marker failed: ${err.message}`);
+    console.warn(`agent-sidecar idle prompt marker failed: ${err.message}`);
   }
 }
 
@@ -97,7 +97,7 @@ function clearPaneTitle(pane, env) {
   return warnings;
 }
 
-export function buildEvent(ctx, env = process.env, feedbackRoute = null, handoffRoute = null, activity = null, handoffId = null) {
+export function buildEvent(ctx, env = process.env, feedbackRoute = null, idleRoute = null, activity = null, idlePromptId = null) {
   const sm = ctx.sessionManager;
   const transcriptRef = sm.getSessionFile();
   if (!transcriptRef) return null; // --no-session: nothing on disk for the CLI to read
@@ -113,9 +113,9 @@ export function buildEvent(ctx, env = process.env, feedbackRoute = null, handoff
   };
   if (progress.progressId) event.progressId = progress.progressId;
   if (feedbackRoute) event.feedbackRoute = feedbackRoute;
-  if (handoffRoute) event.handoffRoute = handoffRoute;
+  if (idleRoute) event.idleRoute = idleRoute;
   if (activity) event.activity = activity;
-  if (handoffId) event.handoffId = handoffId;
+  if (idlePromptId) event.idlePromptId = idlePromptId;
   return event;
 }
 
@@ -134,7 +134,7 @@ function register(pi, env, dependencies = {}) {
   const getJetStreamManager = dependencies.jetstreamManager ?? defaultJetstreamManager;
   const spawnProcess = dependencies.spawn ?? spawn;
   const makeFeedbackRoute = dependencies.createFeedbackRoute ?? createFeedbackRoute;
-  const makeHandoffRoute = dependencies.createHandoffRoute ?? createHandoffRoute;
+  const makeIdleRoute = dependencies.createIdleRoute ?? createIdleRoute;
   const currentSessionId = (ctx) => {
     try {
       return ctx?.sessionManager?.getSessionId?.() ?? null;
@@ -147,20 +147,20 @@ function register(pi, env, dependencies = {}) {
   let activeSession = null;
   let feedbackConnection = null;
   let feedbackSubscription = null;
-  let handoffSubscription = null;
-  let handoffManager = null;
+  let idleSubscription = null;
+  let idleManager = null;
   let feedbackRoute = null;
-  let handoffRoute = null;
-  let handoffInFlight = null;
+  let idleRoute = null;
+  let idleInFlight = null;
   let feedbackGeneration = 0;
   let feedbackRetryTimer = null;
-  let handoffRetryTimer = null;
+  let idleRetryTimer = null;
   let feedbackStartingGeneration = null;
   let feedbackStartPromise = null;
   let feedbackWarningShown = false;
   const seenFeedbackIds = new Set();
-  const seenHandoffIds = new Set();
-  const completedHandoffIds = new Set();
+  const seenIdlePromptIds = new Set();
+  const completedIdlePromptIds = new Set();
 
   const warnFeedback = (ctx, message) => {
     if (feedbackWarningShown) return;
@@ -178,36 +178,36 @@ function register(pi, env, dependencies = {}) {
     feedbackRetryTimer.unref?.();
   };
 
-  const scheduleHandoffRetry = (ctx, generation) => {
-    if (handoffRetryTimer || generation !== feedbackGeneration) return;
-    handoffRetryTimer = setTimeout(() => {
-      handoffRetryTimer = null;
+  const scheduleIdleRetry = (ctx, generation) => {
+    if (idleRetryTimer || generation !== feedbackGeneration) return;
+    idleRetryTimer = setTimeout(() => {
+      idleRetryTimer = null;
       void startFeedback(ctx, generation);
     }, FEEDBACK_RETRY_MS);
-    handoffRetryTimer.unref?.();
+    idleRetryTimer.unref?.();
   };
 
   const stopFeedback = async () => {
     feedbackGeneration += 1;
     if (feedbackRetryTimer) clearTimeout(feedbackRetryTimer);
-    if (handoffRetryTimer) clearTimeout(handoffRetryTimer);
+    if (idleRetryTimer) clearTimeout(idleRetryTimer);
     feedbackRetryTimer = null;
-    handoffRetryTimer = null;
-    const manager = handoffManager;
-    const route = handoffRoute;
+    idleRetryTimer = null;
+    const manager = idleManager;
+    const route = idleRoute;
     const subscription = feedbackSubscription;
-    const handoffSub = handoffSubscription;
+    const idleSub = idleSubscription;
     const connection = feedbackConnection;
     feedbackSubscription = null;
-    handoffSubscription = null;
-    handoffManager = null;
+    idleSubscription = null;
+    idleManager = null;
     feedbackConnection = null;
     feedbackRoute = null;
-    handoffRoute = null;
-    handoffInFlight = null;
+    idleRoute = null;
+    idleInFlight = null;
     if (subscription) subscription.unsubscribe();
-    if (handoffSub) handoffSub.unsubscribe();
-    if (manager && route) await deleteHandoffConsumer(manager, route);
+    if (idleSub) idleSub.unsubscribe();
+    if (manager && route) await deleteIdleConsumer(manager, route);
     if (connection) {
       try {
         await connection.close();
@@ -259,61 +259,61 @@ function register(pi, env, dependencies = {}) {
     }
   };
 
-  const reportHandoff = (ctx, activity, handoffId) => {
-    const event = buildEvent(ctx, env, null, null, activity, handoffId);
+  const reportIdlePrompt = (ctx, activity, idlePromptId) => {
+    const event = buildEvent(ctx, env, null, null, activity, idlePromptId);
     if (!event) return;
     spawnEvent(ctx, event);
   };
 
-  const deliverHandoff = (ctx, route, generation, message) => {
+  const deliverIdlePrompt = (ctx, route, generation, message) => {
     if (generation !== feedbackGeneration || currentSessionId(ctx) !== route.session) return;
-    if (message.data.byteLength > HANDOFF_MAX_PAYLOAD_BYTES) {
-      warnFeedback(ctx, 'idle handoff oversized message dropped');
+    if (message.data.byteLength > IDLE_MAX_PAYLOAD_BYTES) {
+      warnFeedback(ctx, 'idle prompt oversized message dropped');
       return;
     }
 
     let envelope;
     try {
-      envelope = decodeHandoffMessage(message.data);
+      envelope = decodeIdlePromptMessage(message.data);
     } catch (err) {
-      warnFeedback(ctx, `idle handoff invalid message dropped (${err.message})`);
+      warnFeedback(ctx, `idle prompt invalid message dropped (${err.message})`);
       return;
     }
     const progress = currentTurnAndProgress(ctx);
     if (envelope.agent !== 'pi' || envelope.instanceId !== route.instanceId || envelope.session !== route.session || envelope.session !== currentSessionId(ctx)) {
-      console.warn('agent-sidecar idle handoff: stale or misrouted message dropped');
+      console.warn('agent-sidecar idle prompt: stale or misrouted message dropped');
       return;
     }
     if (progress.turn !== envelope.workTurn || (envelope.progressId && envelope.progressId !== progress.progressId)) {
-      console.warn('agent-sidecar idle handoff: old work progress dropped');
+      console.warn('agent-sidecar idle prompt: old work progress dropped');
       return;
     }
     if (!ctx.isIdle()) {
-      console.warn('agent-sidecar idle handoff: Pi is no longer idle; message dropped');
+      console.warn('agent-sidecar idle prompt: Pi is no longer idle; message dropped');
       return;
     }
-    if (completedHandoffIds.has(envelope.planId) || handoffInFlight?.id === envelope.planId || seenHandoffIds.has(envelope.id)) return;
-    seenHandoffIds.add(envelope.id);
-    if (seenHandoffIds.size > 100) seenHandoffIds.delete(seenHandoffIds.values().next().value);
+    if (completedIdlePromptIds.has(envelope.planId) || idleInFlight?.id === envelope.planId || seenIdlePromptIds.has(envelope.id)) return;
+    seenIdlePromptIds.add(envelope.id);
+    if (seenIdlePromptIds.size > 100) seenIdlePromptIds.delete(seenIdlePromptIds.values().next().value);
 
-    handoffInFlight = { id: envelope.planId, workTurn: envelope.workTurn, progressId: envelope.progressId ?? null };
-    appendHandoffMarker(pi, {
+    idleInFlight = { id: envelope.planId, workTurn: envelope.workTurn, progressId: envelope.progressId ?? null };
+    appendIdlePromptMarker(pi, {
       v: 1,
       id: envelope.planId,
       workTurn: envelope.workTurn,
       progressId: envelope.progressId ?? null,
       status: 'triggered',
     });
-    reportHandoff(ctx, 'handoff-triggered', envelope.planId);
+    reportIdlePrompt(ctx, 'idle-prompt-triggered', envelope.planId);
     try {
       pi.sendMessage({
-        customType: 'agent-sidecar-handoff',
-        content: `Agent-sidecar idle handoff:\n\n${envelope.prompt}`,
+        customType: 'agent-sidecar-idle-prompt',
+        content: envelope.prompt,
         display: true,
         details: envelope,
       }, { deliverAs: 'steer', triggerTurn: true });
     } catch (err) {
-      console.warn(`agent-sidecar idle handoff: Pi wake failed (${err.message})`);
+      console.warn(`agent-sidecar idle prompt: Pi wake failed (${err.message})`);
     }
   };
 
@@ -329,39 +329,39 @@ function register(pi, env, dependencies = {}) {
     }
   };
 
-  const consumeHandoff = async (subscription, ctx, route, generation) => {
+  const consumeIdlePrompt = async (subscription, ctx, route, generation) => {
     try {
-      for await (const message of subscription) deliverHandoff(ctx, route, generation, message);
+      for await (const message of subscription) deliverIdlePrompt(ctx, route, generation, message);
     } catch (err) {
       if (generation === feedbackGeneration) {
-        if (handoffSubscription === subscription) handoffSubscription = null;
-        handoffManager = null;
-        warnFeedback(ctx, `idle handoff subscription stopped (${safeFeedbackErrorMessage(err)})`);
+        if (idleSubscription === subscription) idleSubscription = null;
+        idleManager = null;
+        warnFeedback(ctx, `idle prompt subscription stopped (${safeFeedbackErrorMessage(err)})`);
         scheduleFeedbackRetry(ctx, generation);
       }
     }
   };
 
-  async function setupHandoffSubscription(ctx, generation, connection, route) {
+  async function setupIdleSubscription(ctx, generation, connection, route) {
     let manager = null;
     try {
       manager = await withTimeout(getJetStreamManager(connection), NATS_SETUP_TIMEOUT_MS, 'JetStream manager');
-      await withTimeout(ensureHandoffStream(manager), NATS_SETUP_TIMEOUT_MS, 'JetStream stream');
-      await withTimeout(ensureHandoffConsumer(manager, route), NATS_SETUP_TIMEOUT_MS, 'JetStream consumer');
+      await withTimeout(ensureIdleStream(manager), NATS_SETUP_TIMEOUT_MS, 'JetStream stream');
+      await withTimeout(ensureIdleConsumer(manager, route), NATS_SETUP_TIMEOUT_MS, 'JetStream consumer');
       const subscription = connection.subscribe(route.replySubject);
       if (generation !== feedbackGeneration || currentSessionId(ctx) !== activeSession) {
         subscription.unsubscribe();
-        await deleteHandoffConsumer(manager, route);
+        await deleteIdleConsumer(manager, route);
         return false;
       }
-      handoffManager = manager;
-      handoffRoute = route;
-      handoffSubscription = subscription;
-      void consumeHandoff(subscription, ctx, route, generation);
+      idleManager = manager;
+      idleRoute = route;
+      idleSubscription = subscription;
+      void consumeIdlePrompt(subscription, ctx, route, generation);
       return true;
     } catch (err) {
-      if (manager) await deleteHandoffConsumer(manager, route);
-      throw new Error(`idle handoff setup failed (${safeFeedbackErrorMessage(err)})`);
+      if (manager) await deleteIdleConsumer(manager, route);
+      throw new Error(`idle prompt setup failed (${safeFeedbackErrorMessage(err)})`);
     }
   }
 
@@ -376,8 +376,8 @@ function register(pi, env, dependencies = {}) {
       return;
     }
     const wantsFeedback = hasFeedbackItem(rootDir(env));
-    const wantsHandoff = config.idleHandoff.enabled === true;
-    if (!wantsFeedback && !wantsHandoff) return;
+    const wantsIdle = config.idle.enabled === true;
+    if (!wantsFeedback && !wantsIdle) return;
 
     if (feedbackConnection && currentSessionId(ctx) === activeSession) {
       try {
@@ -386,11 +386,11 @@ function register(pi, env, dependencies = {}) {
           feedbackSubscription = feedbackConnection.subscribe(feedbackRoute.replySubject);
           void consumeFeedback(feedbackSubscription, ctx, feedbackRoute, generation);
         }
-        if (wantsHandoff && !handoffSubscription) {
-          const route = handoffRoute ?? makeHandoffRoute(ctx.sessionManager.getSessionId());
-          await setupHandoffSubscription(ctx, generation, feedbackConnection, route);
-          if (handoffRetryTimer) clearTimeout(handoffRetryTimer);
-          handoffRetryTimer = null;
+        if (wantsIdle && !idleSubscription) {
+          const route = idleRoute ?? makeIdleRoute(ctx.sessionManager.getSessionId());
+          await setupIdleSubscription(ctx, generation, feedbackConnection, route);
+          if (idleRetryTimer) clearTimeout(idleRetryTimer);
+          idleRetryTimer = null;
         }
       } catch (err) {
         warnFeedback(ctx, safeFeedbackErrorMessage(err));
@@ -400,11 +400,11 @@ function register(pi, env, dependencies = {}) {
     }
 
     const nextFeedbackRoute = wantsFeedback ? (feedbackRoute ?? makeFeedbackRoute(ctx.sessionManager.getSessionId())) : null;
-    const nextHandoffRoute = wantsHandoff ? (handoffRoute ?? makeHandoffRoute(ctx.sessionManager.getSessionId())) : null;
+    const nextIdleRoute = wantsIdle ? (idleRoute ?? makeIdleRoute(ctx.sessionManager.getSessionId())) : null;
     let connection;
     try {
       connection = await natsConnect(natsConnectionOptions(config.feedback.natsUrl, {
-        name: 'agent-sidecar-feedback-pi',
+        name: 'agent-sidecar-pi',
         reconnect: true,
         maxReconnectAttempts: -1,
         reconnectTimeWait: 1000,
@@ -422,12 +422,12 @@ function register(pi, env, dependencies = {}) {
       feedbackWarningShown = false;
       if (feedbackSubscription) void consumeFeedback(feedbackSubscription, ctx, nextFeedbackRoute, generation);
 
-      if (nextHandoffRoute) {
+      if (nextIdleRoute) {
         try {
-          await setupHandoffSubscription(ctx, generation, connection, nextHandoffRoute);
+          await setupIdleSubscription(ctx, generation, connection, nextIdleRoute);
         } catch (err) {
           warnFeedback(ctx, safeFeedbackErrorMessage(err));
-          scheduleHandoffRetry(ctx, generation);
+          scheduleIdleRetry(ctx, generation);
         }
       }
 
@@ -435,8 +435,8 @@ function register(pi, env, dependencies = {}) {
         if (generation !== feedbackGeneration) return;
         feedbackConnection = null;
         feedbackSubscription = null;
-        handoffSubscription = null;
-        handoffManager = null;
+        idleSubscription = null;
+        idleManager = null;
         if (err) {
           warnFeedback(ctx, `connection closed (${safeFeedbackErrorMessage(err)})`);
           scheduleFeedbackRetry(ctx, generation);
@@ -479,12 +479,12 @@ function register(pi, env, dependencies = {}) {
     child.unref();
   }
 
-  const emit = async (ctx, { activity = null, handoffId = null } = {}) => {
+  const emit = async (ctx, { activity = null, idlePromptId = null } = {}) => {
     if (!feedbackConnection) await startFeedback(ctx);
     const session = currentSessionId(ctx);
     const activeFeedbackRoute = feedbackConnection && feedbackRoute?.session === session ? feedbackRoute : null;
-    const activeHandoffRoute = feedbackConnection && handoffRoute?.session === session ? handoffRoute : null;
-    const event = buildEvent(ctx, env, activeFeedbackRoute, activeHandoffRoute, activity, handoffId);
+    const activeIdleRoute = feedbackConnection && idleRoute?.session === session ? idleRoute : null;
+    const event = buildEvent(ctx, env, activeFeedbackRoute, activeIdleRoute, activity, idlePromptId);
     if (!event) return;
     spawnEvent(ctx, event);
   };
@@ -549,28 +549,28 @@ function register(pi, env, dependencies = {}) {
     await stopFeedback();
     activeSession = currentSessionId(ctx);
     seenFeedbackIds.clear();
-    seenHandoffIds.clear();
-    completedHandoffIds.clear();
-    for (const handoffId of readCompletedHandoffIds(ctx)) completedHandoffIds.add(handoffId);
-    handoffInFlight = readPendingHandoff(ctx);
+    seenIdlePromptIds.clear();
+    completedIdlePromptIds.clear();
+    for (const idlePromptId of readCompletedIdlePromptIds(ctx)) completedIdlePromptIds.add(idlePromptId);
+    idleInFlight = readPendingIdlePrompt(ctx);
     void startFeedback(ctx);
     if (!ctx.hasUI) return;
     const cleared = clearTitleAtSessionStart(event, ctx);
     watchTitle(ctx, { applyExisting: !cleared });
   });
   pi.on('agent_settled', async (event, ctx) => {
-    const pending = handoffInFlight;
+    const pending = idleInFlight;
     const progress = pending ? currentTurnAndProgress(ctx) : null;
-    const isHandoff = pending && progress.turn === pending.workTurn && (!pending.progressId || pending.progressId === progress.progressId);
-    if (isHandoff && !event.aborted) {
-      handoffInFlight = null;
-      completedHandoffIds.add(pending.id);
-      appendHandoffMarker(pi, { v: 1, id: pending.id, workTurn: pending.workTurn, status: 'completed' });
-      await emit(ctx, { activity: 'handoff', handoffId: pending.id });
+    const isIdlePrompt = pending && progress.turn === pending.workTurn && (!pending.progressId || pending.progressId === progress.progressId);
+    if (isIdlePrompt && !event.aborted) {
+      idleInFlight = null;
+      completedIdlePromptIds.add(pending.id);
+      appendIdlePromptMarker(pi, { v: 1, id: pending.id, workTurn: pending.workTurn, status: 'completed' });
+      await emit(ctx, { activity: 'idle-prompt', idlePromptId: pending.id });
       return;
     }
-    if (isHandoff && event.aborted) return;
-    if (pending) handoffInFlight = null;
+    if (isIdlePrompt && event.aborted) return;
+    if (pending) idleInFlight = null;
     if (!event.aborted) await emit(ctx);
   });
   pi.on('session_shutdown', async () => {
@@ -583,7 +583,7 @@ function register(pi, env, dependencies = {}) {
 function withTimeout(promise, timeoutMs, operation) {
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`idle handoff ${operation} timed out after ${timeoutMs}ms`)), timeoutMs);
+    timer = setTimeout(() => reject(new Error(`idle prompt ${operation} timed out after ${timeoutMs}ms`)), timeoutMs);
   });
   return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer));
 }
