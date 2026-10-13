@@ -18,8 +18,6 @@ export const DEFAULT_IDLE = Object.freeze({
   after: '60m',
   prompt: null,
 });
-// Compatibility export for extensions that imported the old constant.
-export const DEFAULT_IDLE_HANDOFF = DEFAULT_IDLE;
 
 export const DEFAULTS = Object.freeze({
   runner: 'pi',
@@ -96,21 +94,15 @@ function validateLifecycle(value, file) {
   }
 }
 
-function addLegacyIdleAlias(config) {
-  Object.defineProperty(config, 'idleHandoff', { value: config.idle, enumerable: false, configurable: true });
-  return config;
-}
-
 export function loadConfig(root) {
   const found = CONFIG_FILES.map((name) => path.join(root, name))
     .map((file) => ({ file, text: readFileIfExists(file) }))
     .filter((f) => f.text !== undefined);
   if (found.length === 0) {
-    return addLegacyIdleAlias({
+    return {
       ...DEFAULTS,
       idle: { ...DEFAULT_IDLE, afterMs: parseDurationMs(DEFAULT_IDLE.after) },
-      warnings: [],
-    });
+    };
   }
   if (found.length > 1) throw new Error(`more than one config file in ${root}: ${found.map((f) => path.basename(f.file)).join(', ')}`);
 
@@ -134,18 +126,11 @@ export function loadConfig(root) {
       validateIdle(value, file);
       continue;
     }
-    if (key === 'idleHandoff') {
-      validateIdle(value, file, 'idleHandoff');
-      continue;
-    }
     if (!(key in CHECKS)) throw new Error(`${file}: unknown key "${key}"`);
     if (!CHECKS[key](value)) throw new Error(`${file}: invalid value for "${key}"`);
   }
 
-  const hasIdle = Object.prototype.hasOwnProperty.call(raw, 'idle');
-  const hasLegacyIdle = Object.prototype.hasOwnProperty.call(raw, 'idleHandoff');
-  if (hasIdle && hasLegacyIdle) throw new Error(`${file}: configure only one of "idle" or deprecated "idleHandoff"`);
-  const idleRaw = raw.idle ?? raw.idleHandoff ?? {};
+  const idleRaw = raw.idle ?? {};
   const idle = {
     ...DEFAULT_IDLE,
     ...idleRaw,
@@ -155,13 +140,12 @@ export function loadConfig(root) {
     throw new Error(`${file}: idle.prompt is required when idle.enabled is true`);
   }
 
-  const { idle: _idle, idleHandoff: _legacyIdle, ...base } = raw;
-  return addLegacyIdleAlias({
+  const { idle: _idle, ...base } = raw;
+  return {
     ...DEFAULTS,
     ...base,
     feedback: { ...DEFAULT_FEEDBACK, ...(raw.feedback ?? {}) },
     lifecycle: { ...DEFAULT_LIFECYCLE, ...(raw.lifecycle ?? {}) },
     idle,
-    warnings: hasLegacyIdle ? ['config key "idleHandoff" is deprecated; use "idle"'] : [],
-  });
+  };
 }

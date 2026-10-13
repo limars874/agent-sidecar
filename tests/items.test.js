@@ -88,7 +88,7 @@ test('loadItems skips bad files and duplicates, keeps the rest', (t) => {
   assert.deepEqual(loadItems(path.join(dir, 'missing')), { items: [], errors: [] });
 });
 
-test('config: generic idle defaults, overrides, aliases, and errors', (t) => {
+test('config: generic idle defaults, overrides, and errors', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'config-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   assert.equal(loadConfig(dir).runner, 'pi');
@@ -114,16 +114,10 @@ test('config: generic idle defaults, overrides, aliases, and errors', (t) => {
   assert.equal(c.timeoutMs, 120000);
   assert.deepEqual(c.idle, { enabled: true, after: '2s', afterMs: 2000, prompt: 'Reply IDLE_OK' });
   assert.deepEqual(c.lifecycle, { clearTitleOnNew: false, clearTitleOnResume: true });
-  fs.writeFileSync(path.join(dir, 'config.yaml'), 'idleHandoff:\n  enabled: true\n  after: 2s\n  prompt: Legacy prompt\n');
-  const legacy = loadConfig(dir);
-  assert.deepEqual(legacy.idle, { enabled: true, after: '2s', afterMs: 2000, prompt: 'Legacy prompt' });
-  assert.match(legacy.warnings[0], /deprecated/);
   fs.writeFileSync(path.join(dir, 'config.yaml'), 'idle:\n  enabled: true\n  after: 2s\n');
   assert.throws(() => loadConfig(dir), /idle.prompt is required when idle.enabled is true/);
   fs.writeFileSync(path.join(dir, 'config.yaml'), 'idle:\n  enabled: true\n  after: forever\n  prompt: x\n');
   assert.throws(() => loadConfig(dir), /invalid value for "idle.after"/);
-  fs.writeFileSync(path.join(dir, 'config.yaml'), 'idle:\n  enabled: true\n  prompt: x\nidleHandoff:\n  enabled: false\n');
-  assert.throws(() => loadConfig(dir), /only one of "idle" or deprecated "idleHandoff"/);
   fs.writeFileSync(path.join(dir, 'config.yaml'), 'lifecycle:\n  clearTitleOnStart: false\n');
   assert.throws(() => loadConfig(dir), /unknown key "lifecycle.clearTitleOnStart"/);
   fs.writeFileSync(path.join(dir, 'config.yaml'), 'lifecycle:\n  clearTitleOnNew: yes\n');

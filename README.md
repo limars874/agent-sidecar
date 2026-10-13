@@ -148,7 +148,7 @@ idle:
 
 Each normal work completion cancels the previous pending schedule and creates one replacement on a plan-specific schedule subject. When the schedule fires, the Pi extension validates the session, work turn and progress id, then sends the configured text as an `agent-sidecar-idle-prompt` custom message with `deliverAs: steer` and `triggerTurn: true`; this intentionally wakes the original idle Pi agent. The sidecar does not inspect the prompt or assign it a document-writing meaning.
 
-The schedule is one-shot and stateful per session: a new work batch re-arms it, one batch triggers at most one prompt, and trigger completion is tracked separately from any work the agent performs. If cancellation or scheduling has an unknown result, the plan stays pending and retries the same plan id; a later work batch supersedes it without reusing the old schedule subject. JetStream or delivery failures are explicit warnings; there is no polling or fallback trigger. For one release, `idleHandoff` remains a compatibility alias when `idle` is absent; configuring both is an error. Full boundary details are in [CONTRACT.md §5.3](CONTRACT.md#53-idle-prompt).
+The schedule is one-shot and stateful per session: a new work batch re-arms it, one batch triggers at most one prompt, and trigger completion is tracked separately from any work the agent performs. If cancellation or scheduling has an unknown result, the plan stays pending and retries the same plan id; a later work batch supersedes it without reusing the old schedule subject. JetStream or delivery failures are explicit warnings; there is no polling or fallback trigger. Full boundary details are in [CONTRACT.md §5.3](CONTRACT.md#53-idle-prompt).
 
 ## Lifecycle title cleanup
 

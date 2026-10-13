@@ -339,11 +339,11 @@ test('extension: delivers a generic idle prompt with an active Pi wake', async (
   };
   const route = {
     v: 1,
-    instanceId: 'instance-handoff',
-    replySubject: '_INBOX.handoff',
-    targetSubject: 'agent-sidecar.handoff.target.instance-handoff',
-    scheduleSubject: 'agent-sidecar.handoff.schedule.instance-handoff',
-    controlSubject: 'agent-sidecar.handoff.control.instance-handoff',
+    instanceId: 'instance-idle',
+    replySubject: '_INBOX.idle',
+    targetSubject: 'agent-sidecar.handoff.target.instance-idle',
+    scheduleSubject: 'agent-sidecar.handoff.schedule.instance-idle',
+    controlSubject: 'agent-sidecar.handoff.control.instance-idle',
     session: PI_SESSION_ID,
   };
   const manager = {
@@ -457,11 +457,11 @@ test('extension: keeps Feedback V1 when idle-prompt JetStream setup fails', asyn
   const feedbackRoute = { v: 1, instanceId: 'feedback-instance', replySubject: '_INBOX.feedback', session: PI_SESSION_ID };
   const idleRoute = {
     v: 1,
-    instanceId: 'handoff-instance',
-    replySubject: '_INBOX.handoff',
-    targetSubject: 'agent-sidecar.handoff.target.handoff-instance',
-    scheduleSubject: 'agent-sidecar.handoff.schedule.handoff-instance',
-    controlSubject: 'agent-sidecar.handoff.control.handoff-instance',
+    instanceId: 'idle-instance',
+    replySubject: '_INBOX.idle',
+    targetSubject: 'agent-sidecar.handoff.target.idle-instance',
+    scheduleSubject: 'agent-sidecar.handoff.schedule.idle-instance',
+    controlSubject: 'agent-sidecar.handoff.control.idle-instance',
     session: PI_SESSION_ID,
   };
   const manager = {
@@ -482,7 +482,7 @@ test('extension: keeps Feedback V1 when idle-prompt JetStream setup fails', asyn
   t.after(() => pi.handlers.session_shutdown({}));
   await waitFor(() => subscriptions.length === 1);
   assert.equal(subscriptions[0], feedbackRoute.replySubject);
-  assert.equal(closed, 0, 'feedback connection remains available after handoff setup failure');
+  assert.equal(closed, 0, 'feedback connection remains available after idle setup failure');
 });
 
 test('extension: applies titles the CLI host writes', async (t) => {

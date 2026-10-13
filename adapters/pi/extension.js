@@ -50,7 +50,7 @@ function currentTurnAndProgress(ctx) {
 function readCompletedIdlePromptIds(ctx) {
   const entries = ctx.sessionManager.getBranch?.() ?? ctx.sessionManager.getEntries?.() ?? [];
   return new Set(entries
-    .filter((entry) => entry?.type === 'custom' && ['agent-sidecar-idle-prompt', 'agent-sidecar-handoff'].includes(entry.customType) && entry.data?.status === 'completed' && typeof entry.data.id === 'string')
+    .filter((entry) => entry?.type === 'custom' && entry.customType === 'agent-sidecar-idle-prompt' && entry.data?.status === 'completed' && typeof entry.data.id === 'string')
     .map((entry) => entry.data.id));
 }
 
@@ -59,7 +59,7 @@ function readPendingIdlePrompt(ctx) {
   const seenIds = new Set();
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
-    if (entry?.type !== 'custom' || !['agent-sidecar-idle-prompt', 'agent-sidecar-handoff'].includes(entry.customType)) continue;
+    if (entry?.type !== 'custom' || entry.customType !== 'agent-sidecar-idle-prompt') continue;
     const data = entry.data ?? {};
     if (typeof data.id !== 'string' || data.id === '' || seenIds.has(data.id)) continue;
     seenIds.add(data.id);
@@ -71,9 +71,9 @@ function readPendingIdlePrompt(ctx) {
   return null;
 }
 
-function appendIdlePromptMarker(pi, value, legacy = false) {
+function appendIdlePromptMarker(pi, value) {
   try {
-    pi.appendEntry(legacy ? 'agent-sidecar-handoff' : 'agent-sidecar-idle-prompt', value);
+    pi.appendEntry('agent-sidecar-idle-prompt', value);
   } catch (err) {
     console.warn(`agent-sidecar idle prompt marker failed: ${err.message}`);
   }
@@ -134,8 +134,7 @@ function register(pi, env, dependencies = {}) {
   const getJetStreamManager = dependencies.jetstreamManager ?? defaultJetstreamManager;
   const spawnProcess = dependencies.spawn ?? spawn;
   const makeFeedbackRoute = dependencies.createFeedbackRoute ?? createFeedbackRoute;
-  const legacyIdleProtocol = !dependencies.createIdleRoute && Boolean(dependencies.createHandoffRoute);
-  const makeIdleRoute = dependencies.createIdleRoute ?? dependencies.createHandoffRoute ?? createIdleRoute;
+  const makeIdleRoute = dependencies.createIdleRoute ?? createIdleRoute;
   const currentSessionId = (ctx) => {
     try {
       return ctx?.sessionManager?.getSessionId?.() ?? null;
@@ -263,11 +262,6 @@ function register(pi, env, dependencies = {}) {
   const reportIdlePrompt = (ctx, activity, idlePromptId) => {
     const event = buildEvent(ctx, env, null, null, activity, idlePromptId);
     if (!event) return;
-    if (legacyIdleProtocol) {
-      event.activity = activity === 'idle-prompt-triggered' ? 'handoff-triggered' : 'handoff';
-      event.handoffId = idlePromptId;
-      delete event.idlePromptId;
-    }
     spawnEvent(ctx, event);
   };
 
@@ -309,12 +303,12 @@ function register(pi, env, dependencies = {}) {
       workTurn: envelope.workTurn,
       progressId: envelope.progressId ?? null,
       status: 'triggered',
-    }, legacyIdleProtocol);
+    });
     reportIdlePrompt(ctx, 'idle-prompt-triggered', envelope.planId);
     try {
       pi.sendMessage({
-        customType: legacyIdleProtocol ? 'agent-sidecar-handoff' : 'agent-sidecar-idle-prompt',
-        content: legacyIdleProtocol ? `Agent-sidecar idle handoff:\n\n${envelope.prompt}` : envelope.prompt,
+        customType: 'agent-sidecar-idle-prompt',
+        content: envelope.prompt,
         display: true,
         details: envelope,
       }, { deliverAs: 'steer', triggerTurn: true });
@@ -492,13 +486,6 @@ function register(pi, env, dependencies = {}) {
     const activeIdleRoute = feedbackConnection && idleRoute?.session === session ? idleRoute : null;
     const event = buildEvent(ctx, env, activeFeedbackRoute, activeIdleRoute, activity, idlePromptId);
     if (!event) return;
-    if (legacyIdleProtocol && idlePromptId) {
-      event.activity = activity === 'idle-prompt-triggered' ? 'handoff-triggered' : 'handoff';
-      event.handoffId = idlePromptId;
-      event.handoffRoute = event.idleRoute;
-      delete event.idlePromptId;
-      delete event.idleRoute;
-    }
     spawnEvent(ctx, event);
   };
 
@@ -578,7 +565,7 @@ function register(pi, env, dependencies = {}) {
     if (isIdlePrompt && !event.aborted) {
       idleInFlight = null;
       completedIdlePromptIds.add(pending.id);
-      appendIdlePromptMarker(pi, { v: 1, id: pending.id, workTurn: pending.workTurn, status: 'completed' }, legacyIdleProtocol);
+      appendIdlePromptMarker(pi, { v: 1, id: pending.id, workTurn: pending.workTurn, status: 'completed' });
       await emit(ctx, { activity: 'idle-prompt', idlePromptId: pending.id });
       return;
     }

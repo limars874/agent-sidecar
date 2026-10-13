@@ -10,23 +10,16 @@ import { applyOutput, cleanTitle, ensureSessionMetadata, expandPathTemplate } fr
 import { safeSegment, sessionOutputDir } from '../core/paths.js';
 import { fillPrompt, renderContext, resolveEffort, resolveModel, runItem } from '../core/runner.js';
 import { getSessionContext, normalizeCreatedAt } from '../core/session.js';
-import {
-  completeIdleHandoff,
-  createHandoffRoute,
-  markIdleHandoffScheduled,
-  markIdleHandoffScheduleFailed,
-  markIdleHandoffTriggered,
-  planIdleHandoff,
-  publishIdleHandoffPlan,
-} from '../core/idle-handoff.js';
 import { emptyState, planEvent } from '../core/scheduler.js';
 import {
   buildIdlePromptEnvelope,
   completeIdlePrompt,
   createIdleRoute,
   markIdlePromptScheduled,
+  markIdlePromptScheduleFailed,
   markIdlePromptTriggered,
   planIdlePrompt,
+  publishIdlePromptPlan,
 } from '../core/idle-prompt.js';
 import { readState, runIsStale, updateState, updateStateAsync, withLock } from '../core/state.js';
 import { countTurns, renderTranscript, sliceTurns } from '../core/transcript.js';
@@ -77,237 +70,6 @@ test('scheduler: a shorter branch restarts counting', () => {
   assert.equal(r.state.items.a.lastTurn, 3);
 });
 
-test('legacy idle-handoff state compatibility: one plan per progress and one completion', () => {
-  const route = createHandoffRoute('s', { instanceId: 'instance-a', replySubject: '_INBOX.handoff-a' });
-  const config = { idleHandoff: { enabled: true, after: '1m', afterMs: 60_000, prompt: 'Check handoff' } };
-  const event = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
-  const first = planIdleHandoff({ state: emptyState(), event, config, now: '2026-10-12T12:00:00.000Z', planId: 'plan-1' });
-  assert.equal(first.action.type, 'schedule');
-  assert.equal(first.action.plan.deadline, '2026-10-12T12:01:00.000Z');
-  assert.notEqual(first.action.plan.route.scheduleSubject, route.scheduleSubject);
-  const scheduled = markIdleHandoffScheduled(first.state, 'plan-1', '2026-10-12T12:00:01.000Z');
-  assert.equal(scheduled.idleHandoff.plan.status, 'scheduled');
-
-  const duplicate = planIdleHandoff({ state: scheduled, event, config, now: '2026-10-12T12:00:02.000Z', planId: 'plan-duplicate' });
-  assert.equal(duplicate.action, null);
-
-  const triggered = markIdleHandoffTriggered(scheduled, { planId: 'plan-1', now: '2026-10-12T13:01:00.000Z' });
-  assert.equal(triggered.matched, true);
-  const completed = completeIdleHandoff(triggered.state, { handoffId: 'plan-1', now: '2026-10-12T13:01:05.000Z' });
-  assert.equal(completed.matched, true);
-  assert.equal(completed.state.idleHandoff.plan, null);
-  assert.equal(completed.state.idleHandoff.lastCheck.documentWritten, null);
-
-  const afterCheck = planIdleHandoff({ state: completed.state, event, config, now: '2026-10-12T14:00:00.000Z', planId: 'plan-again' });
-  assert.equal(afterCheck.action, null, 'the same work batch is not checked twice');
-  const next = planIdleHandoff({
-    state: completed.state,
-    event: { ...event, turn: 2, progressId: 'user-2' },
-    config,
-    now: '2026-10-12T14:00:00.000Z',
-    planId: 'plan-2',
-  });
-  assert.equal(next.action.plan.id, 'plan-2');
-  assert.equal(next.action.previousPlan, null);
-  assert.notEqual(next.action.plan.route.scheduleSubject, first.action.plan.route.scheduleSubject);
-});
-
-test('legacy idle-handoff state compatibility: pending replacement keeps cancellation target', () => {
-  const route = createHandoffRoute('s', { instanceId: 'instance-a', replySubject: '_INBOX.handoff-a' });
-  const config = { idleHandoff: { enabled: true, afterMs: 60_000, prompt: 'Check handoff' } };
-  const firstEvent = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
-  const first = planIdleHandoff({ state: emptyState(), event: firstEvent, config, planId: 'plan-1' });
-  const retry = planIdleHandoff({ state: first.state, event: firstEvent, config, planId: 'ignored' });
-  assert.equal(retry.action.plan.id, 'plan-1');
-  assert.equal(retry.action.previousPlan, null);
-
-  const scheduled = markIdleHandoffScheduled(first.state, 'plan-1');
-  const second = planIdleHandoff({
-    state: scheduled,
-    event: { ...firstEvent, turn: 2, progressId: 'user-2' },
-    config,
-    planId: 'plan-2',
-  });
-  assert.equal(second.action.previousPlan.id, 'plan-1');
-  assert.deepEqual(second.action.plan.previousPlan, { id: 'plan-1', route: first.action.plan.route });
-
-  const newRoute = createHandoffRoute('s', { instanceId: 'instance-b', replySubject: '_INBOX.handoff-b' });
-  const restarted = planIdleHandoff({
-    state: scheduled,
-    event: { ...firstEvent, handoffRoute: newRoute },
-    config,
-    planId: 'plan-after-restart',
-  });
-  assert.equal(restarted.action.plan.id, 'plan-after-restart');
-  assert.equal(restarted.action.previousPlan.id, 'plan-1');
-  assert.equal(restarted.action.plan.route.instanceId, 'instance-b');
-});
-
-test('legacy idle-handoff publisher compatibility: cancels before replacement', async () => {
-  const route = createHandoffRoute('s', { instanceId: 'instance-a', replySubject: '_INBOX.handoff-a' });
-  const previous = { id: 'plan-1', route: { ...route, scheduleSubject: `${route.scheduleSubject}.plan.plan-1` } };
-  const plan = {
-    id: 'plan-2',
-    work: { turn: 2, progressId: 'user-2' },
-    deadline: '2026-10-12T12:01:00.000Z',
-    prompt: 'Check handoff',
-    route: { ...route, scheduleSubject: `${route.scheduleSubject}.plan.plan-2` },
-  };
-  const event = { agent: 'pi', session: 's', turn: 2, handoffRoute: route };
-  const calls = [];
-  let closed = 0;
-  const manager = {
-    streams: {
-      async info() {
-        return { config: { subjects: ['agent-sidecar.handoff.>'], allow_msg_schedules: true, allow_rollup_hdrs: true } };
-      },
-    },
-  };
-  const result = await publishIdleHandoffPlan({
-    config: { feedback: { natsUrl: 'nats://127.0.0.1:4222' } },
-    event,
-    plan,
-    previousPlan: previous,
-    manager: async () => manager,
-    jsFactory: () => ({
-      publish(subject, payload, options) {
-        calls.push({ subject, payload, options });
-        return Promise.resolve({});
-      },
-    }),
-    connect: async () => ({
-      async flush() {},
-      async close() { closed += 1; },
-    }),
-  });
-  assert.deepEqual(result, { scheduled: true, warning: null });
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].subject, route.controlSubject);
-  assert.equal(calls[0].options.headers.get('Nats-Schedule-Next'), 'purge');
-  assert.equal(calls[0].options.headers.get('Nats-Scheduler'), previous.route.scheduleSubject);
-  assert.equal(calls[1].subject, plan.route.scheduleSubject);
-  assert.notEqual(calls[1].subject, calls[0].options.headers.get('Nats-Scheduler'));
-  assert.equal(calls[1].options.schedule.target, route.targetSubject);
-  assert.equal(calls[1].options.msgID, 'agent-sidecar-handoff-plan-2');
-  assert.equal(closed, 1);
-});
-
-test('legacy idle-handoff compatibility: unknown publish retries the same plan id', async () => {
-  const route = createHandoffRoute('s', { instanceId: 'instance-timeout', replySubject: '_INBOX.timeout' });
-  const event = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
-  const config = { idleHandoff: { enabled: true, afterMs: 60_000, prompt: 'Check handoff' } };
-  const first = planIdleHandoff({ state: emptyState(), event, config, planId: 'plan-timeout' });
-  const manager = {
-    streams: {
-      async info() {
-        return { config: { subjects: ['agent-sidecar.handoff.>'], allow_msg_schedules: true, allow_rollup_hdrs: true } };
-      },
-    },
-  };
-  const result = await publishIdleHandoffPlan({
-    config: { feedback: { natsUrl: 'nats://127.0.0.1:4222' } },
-    event,
-    plan: first.action.plan,
-    previousPlan: null,
-    manager: async () => manager,
-    jsFactory: () => ({ publish: () => new Promise(() => {}) }),
-    connect: async () => ({ async close() {} }),
-    timeoutMs: 10,
-  });
-  assert.equal(result.scheduled, false);
-  assert.match(result.warning, /schedule timed out/);
-  const pending = markIdleHandoffScheduleFailed(first.state, 'plan-timeout', result.warning, '2026-10-12T12:00:01.000Z');
-  assert.equal(pending.idleHandoff.plan.status, 'pending');
-  assert.equal(pending.idleHandoff.plan.id, 'plan-timeout');
-  assert.equal(pending.idleHandoff.plan.scheduleAttempts, 1);
-  const retry = planIdleHandoff({ state: pending, event, config, planId: 'must-not-replace' });
-  assert.equal(retry.action.plan.id, 'plan-timeout');
-
-  const legacyError = structuredClone(pending);
-  legacyError.idleHandoff.plan.status = 'error';
-  const migratedRetry = planIdleHandoff({ state: legacyError, event, config, planId: 'must-not-replace-either' });
-  assert.equal(migratedRetry.action.plan.id, 'plan-timeout');
-  assert.equal(migratedRetry.state.idleHandoff.plan.status, 'pending');
-});
-
-test('legacy idle-handoff compatibility: cancel success plus timeout preserves idempotency', async () => {
-  const route = createHandoffRoute('s', { instanceId: 'instance-replace-timeout', replySubject: '_INBOX.replace-timeout' });
-  const config = { idleHandoff: { enabled: true, afterMs: 60_000, prompt: 'Check handoff' } };
-  const firstEvent = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
-  const first = planIdleHandoff({ state: emptyState(), event: firstEvent, config, planId: 'plan-old' });
-  const scheduled = markIdleHandoffScheduled(first.state, 'plan-old');
-  const secondEvent = { ...firstEvent, turn: 2, progressId: 'user-2' };
-  const second = planIdleHandoff({ state: scheduled, event: secondEvent, config, planId: 'plan-new' });
-  const calls = [];
-  const manager = {
-    streams: {
-      async info() {
-        return { config: { subjects: ['agent-sidecar.handoff.>'], allow_msg_schedules: true, allow_rollup_hdrs: true } };
-      },
-    },
-  };
-  const result = await publishIdleHandoffPlan({
-    config: { feedback: { natsUrl: 'nats://127.0.0.1:4222' } },
-    event: secondEvent,
-    plan: second.action.plan,
-    previousPlan: second.action.previousPlan,
-    manager: async () => manager,
-    jsFactory: () => ({
-      publish(subject, payload, options) {
-        calls.push({ subject, options });
-        return calls.length === 1 ? Promise.resolve({}) : new Promise(() => {});
-      },
-    }),
-    connect: async () => ({ async close() {} }),
-    timeoutMs: 10,
-  });
-  assert.equal(result.scheduled, false);
-  assert.equal(calls.length, 2, 'cancel succeeds before schedule reaches its timeout');
-  const pending = markIdleHandoffScheduleFailed(second.state, 'plan-new', result.warning);
-  assert.equal(pending.idleHandoff.plan.id, 'plan-new');
-  assert.equal(pending.idleHandoff.plan.status, 'pending');
-  const retry = planIdleHandoff({ state: pending, event: secondEvent, config, planId: 'must-not-replace' });
-  assert.equal(retry.action.plan.id, 'plan-new');
-  assert.equal(retry.action.previousPlan.id, 'plan-old');
-});
-
-test('legacy idle-handoff lifecycle compatibility: idempotent and reorder-safe', () => {
-  const route = createHandoffRoute('s', { instanceId: 'instance-lifecycle', replySubject: '_INBOX.lifecycle' });
-  const config = { idleHandoff: { enabled: true, afterMs: 60_000, prompt: 'Check handoff' } };
-  const event = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
-  const first = planIdleHandoff({ state: emptyState(), event, config, planId: 'plan-lifecycle-1' });
-
-  // 分离的 trigger event 可能晚于 completion 抵达 CLI。
-  const completedBeforeTrigger = completeIdleHandoff(first.state, { handoffId: 'plan-lifecycle-1', now: '2026-10-12T12:01:00.000Z' });
-  assert.equal(completedBeforeTrigger.matched, true);
-  assert.equal(markIdleHandoffTriggered(completedBeforeTrigger.state, { planId: 'plan-lifecycle-1' }).matched, false);
-
-  const second = planIdleHandoff({
-    state: completedBeforeTrigger.state,
-    event: { ...event, turn: 2, progressId: 'user-2' },
-    config,
-    planId: 'plan-lifecycle-2',
-  });
-  const triggered = markIdleHandoffTriggered(second.state, { planId: 'plan-lifecycle-2', now: '2026-10-12T12:02:00.000Z' });
-  const duplicateTrigger = markIdleHandoffTriggered(triggered.state, { planId: 'plan-lifecycle-2', now: '2026-10-12T12:03:00.000Z' });
-  assert.equal(duplicateTrigger.matched, true);
-  assert.equal(duplicateTrigger.state.idleHandoff.plan.triggeredAt, '2026-10-12T12:02:00.000Z');
-
-  const replacement = planIdleHandoff({
-    state: duplicateTrigger.state,
-    event: { ...event, turn: 3, progressId: 'user-3' },
-    config,
-    planId: 'plan-lifecycle-3',
-  });
-  const wrongCompletion = completeIdleHandoff(replacement.state, { handoffId: 'plan-lifecycle-3' });
-  assert.equal(wrongCompletion.matched, false, 'a completion for a newer plan cannot erase an older in-flight check');
-  assert.equal(wrongCompletion.state.idleHandoff.inFlight.id, 'plan-lifecycle-2');
-  const completed = completeIdleHandoff(wrongCompletion.state, { handoffId: 'plan-lifecycle-2', now: '2026-10-12T12:04:00.000Z' });
-  assert.equal(completed.matched, true);
-  assert.equal(completed.state.idleHandoff.plan.id, 'plan-lifecycle-3');
-  assert.equal(completeIdleHandoff(completed.state, { handoffId: 'plan-lifecycle-2' }).matched, false);
-});
-
 test('generic idle prompt: schedules, wakes, completes, and keeps the prompt opaque', () => {
   const route = createIdleRoute('s', { instanceId: 'instance-idle', replySubject: '_INBOX.idle' });
   const config = { idle: { enabled: true, after: '1m', afterMs: 60_000, prompt: 'Reply IDLE_OK' } };
@@ -327,12 +89,147 @@ test('generic idle prompt: schedules, wakes, completes, and keeps the prompt opa
   assert.equal(envelope.envelope.prompt, 'Reply IDLE_OK');
 });
 
-test('generic idle prompt: legacy state migrates without duplicate idle state', () => {
-  const legacy = { v: 1, items: {}, idleHandoff: { lastWork: null, lastCheck: null, inFlight: null, plan: null, scheduleError: null } };
+test('generic idle prompt: replacement keeps its cancellation target', () => {
+  const route = createIdleRoute('s', { instanceId: 'instance-a', replySubject: '_INBOX.idle-a' });
+  const config = { idle: { enabled: true, afterMs: 60_000, prompt: 'Reply IDLE_OK' } };
+  const firstEvent = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', idleRoute: route };
+  const first = planIdlePrompt({ state: emptyState(), event: firstEvent, config, planId: 'idle-1' });
+  const scheduled = markIdlePromptScheduled(first.state, 'idle-1');
+  const second = planIdlePrompt({
+    state: scheduled,
+    event: { ...firstEvent, turn: 2, progressId: 'user-2' },
+    config,
+    planId: 'idle-2',
+  });
+  assert.equal(second.action.previousPlan.id, 'idle-1');
+  assert.deepEqual(second.action.plan.previousPlan, { id: 'idle-1', route: first.action.plan.route });
+
+  const newRoute = createIdleRoute('s', { instanceId: 'instance-b', replySubject: '_INBOX.idle-b' });
+  const restarted = planIdlePrompt({
+    state: scheduled,
+    event: { ...firstEvent, idleRoute: newRoute },
+    config,
+    planId: 'idle-after-restart',
+  });
+  assert.equal(restarted.action.plan.id, 'idle-after-restart');
+  assert.equal(restarted.action.previousPlan.id, 'idle-1');
+  assert.equal(restarted.action.plan.route.instanceId, 'instance-b');
+});
+
+test('generic idle prompt: publisher cancels before replacement', async () => {
+  const route = createIdleRoute('s', { instanceId: 'instance-a', replySubject: '_INBOX.idle-a' });
+  const previous = { id: 'idle-1', route: { ...route, scheduleSubject: `${route.scheduleSubject}.plan.idle-1` } };
+  const idlePlan = {
+    id: 'idle-2',
+    work: { turn: 2, progressId: 'user-2' },
+    deadline: '2026-10-12T12:01:00.000Z',
+    prompt: 'Reply IDLE_OK',
+    route: { ...route, scheduleSubject: `${route.scheduleSubject}.plan.idle-2` },
+  };
+  const event = { agent: 'pi', session: 's', turn: 2, idleRoute: route };
+  const calls = [];
+  let closed = 0;
+  const manager = {
+    streams: {
+      async info() {
+        return { config: { subjects: ['agent-sidecar.handoff.>'], allow_msg_schedules: true, allow_rollup_hdrs: true } };
+      },
+    },
+  };
+  const result = await publishIdlePromptPlan({
+    config: { feedback: { natsUrl: 'nats://127.0.0.1:4222' } },
+    event,
+    plan: idlePlan,
+    previousPlan: previous,
+    manager: async () => manager,
+    jsFactory: () => ({
+      publish(subject, payload, options) {
+        calls.push({ subject, payload, options });
+        return Promise.resolve({});
+      },
+    }),
+    connect: async () => ({
+      async close() { closed += 1; },
+    }),
+  });
+  assert.deepEqual(result, { scheduled: true, warning: null });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].subject, route.controlSubject);
+  assert.equal(calls[0].options.headers.get('Nats-Scheduler'), previous.route.scheduleSubject);
+  assert.equal(calls[1].subject, idlePlan.route.scheduleSubject);
+  assert.notEqual(calls[1].subject, calls[0].options.headers.get('Nats-Scheduler'));
+  assert.equal(calls[1].options.msgID, 'agent-sidecar-idle-idle-2');
+  assert.equal(closed, 1);
+});
+
+test('generic idle prompt: uncertain publish retries the same plan id', async () => {
+  const route = createIdleRoute('s', { instanceId: 'instance-timeout', replySubject: '_INBOX.timeout' });
+  const event = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', idleRoute: route };
+  const config = { idle: { enabled: true, afterMs: 60_000, prompt: 'Reply IDLE_OK' } };
+  const first = planIdlePrompt({ state: emptyState(), event, config, planId: 'idle-timeout' });
+  const manager = {
+    streams: {
+      async info() {
+        return { config: { subjects: ['agent-sidecar.handoff.>'], allow_msg_schedules: true, allow_rollup_hdrs: true } };
+      },
+    },
+  };
+  const result = await publishIdlePromptPlan({
+    config: { feedback: { natsUrl: 'nats://127.0.0.1:4222' } },
+    event,
+    plan: first.action.plan,
+    previousPlan: null,
+    manager: async () => manager,
+    jsFactory: () => ({ publish: () => new Promise(() => {}) }),
+    connect: async () => ({ async close() {} }),
+    timeoutMs: 10,
+  });
+  assert.equal(result.scheduled, false);
+  assert.match(result.warning, /schedule timed out/);
+  const pending = markIdlePromptScheduleFailed(first.state, 'idle-timeout', result.warning);
+  assert.equal(pending.idle.plan.status, 'pending');
+  assert.equal(pending.idle.plan.id, 'idle-timeout');
+  assert.equal(pending.idle.plan.scheduleAttempts, 1);
+  assert.equal(planIdlePrompt({ state: pending, event, config, planId: 'must-not-replace' }).action.plan.id, 'idle-timeout');
+});
+
+test('generic idle prompt: lifecycle is idempotent and reorder-safe', () => {
+  const route = createIdleRoute('s', { instanceId: 'instance-lifecycle', replySubject: '_INBOX.lifecycle' });
+  const config = { idle: { enabled: true, afterMs: 60_000, prompt: 'Reply IDLE_OK' } };
+  const event = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', idleRoute: route };
+  const first = planIdlePrompt({ state: emptyState(), event, config, planId: 'idle-1' });
+  const completedBeforeTrigger = completeIdlePrompt(first.state, { idlePromptId: 'idle-1' });
+  assert.equal(completedBeforeTrigger.matched, true);
+  assert.equal(markIdlePromptTriggered(completedBeforeTrigger.state, { idlePromptId: 'idle-1' }).matched, false);
+
+  const second = planIdlePrompt({
+    state: completedBeforeTrigger.state,
+    event: { ...event, turn: 2, progressId: 'user-2' },
+    config,
+    planId: 'idle-2',
+  });
+  const triggered = markIdlePromptTriggered(second.state, { idlePromptId: 'idle-2' });
+  const duplicateTrigger = markIdlePromptTriggered(triggered.state, { idlePromptId: 'idle-2' });
+  assert.equal(duplicateTrigger.matched, true);
+  assert.equal(duplicateTrigger.state.idle.plan.triggeredAt, triggered.state.idle.plan.triggeredAt);
+
+  const replacement = planIdlePrompt({
+    state: duplicateTrigger.state,
+    event: { ...event, turn: 3, progressId: 'user-3' },
+    config,
+    planId: 'idle-3',
+  });
+  assert.equal(completeIdlePrompt(replacement.state, { idlePromptId: 'idle-3' }).matched, false);
+  const completed = completeIdlePrompt(replacement.state, { idlePromptId: 'idle-2' });
+  assert.equal(completed.matched, true);
+  assert.equal(completed.state.idle.plan.id, 'idle-3');
+});
+
+test('generic idle prompt: disabled sessions do not create idle state', () => {
+  const state = { v: 1, items: {} };
   const config = { idle: { enabled: false, afterMs: 60_000, prompt: 'x' } };
-  const result = planIdlePrompt({ state: legacy, event: { agent: 'pi', session: 's', turn: 1 }, config });
-  assert.equal(result.state.idle !== undefined, true);
-  assert.equal(result.state.idleHandoff, undefined);
+  const result = planIdlePrompt({ state, event: { agent: 'pi', session: 's', turn: 1 }, config });
+  assert.equal(result.state.idle, undefined);
   assert.equal(result.action, null);
 });
 
@@ -368,19 +265,18 @@ test('event validation', () => {
   assert.throws(() => validateEvent({ ...ok, model: 3 }, ['pi']), /model/);
 });
 
-test('feedback and legacy idle routes are optional and validated against the session', () => {
+test('feedback and idle routes are optional and validated against the session', () => {
   const route = { v: 1, instanceId: 'instance-a', replySubject: '_INBOX.route-a', session: 's' };
   assert.deepEqual(validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', feedbackRoute: route }, ['pi']).feedbackRoute, route);
   assert.throws(() => validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', feedbackRoute: { ...route, session: 'other' } }, ['pi']), /match event.session/);
   assert.throws(() => validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', feedbackRoute: { ...route, replySubject: '_INBOX.*' } }, ['pi']), /concrete NATS subject/);
 
   const idleRoute = createIdleRoute('s', { instanceId: 'instance-idle-event', replySubject: '_INBOX.idle-event' });
-  assert.deepEqual(validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', idleRoute }, ['pi']).idleRoute, idleRoute);
+  const idleEvent = validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', activity: 'idle-prompt', idlePromptId: 'idle-1', idleRoute }, ['pi']);
+  assert.deepEqual(idleEvent.idleRoute, idleRoute);
+  assert.equal(idleEvent.idlePromptId, 'idle-1');
   assert.throws(() => validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', activity: 'idle-prompt' }, ['pi']), /idlePromptId/);
-  const handoffRoute = createHandoffRoute('s', { instanceId: 'instance-handoff', replySubject: '_INBOX.handoff' });
-  assert.deepEqual(validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', handoffRoute }, ['pi']).handoffRoute, handoffRoute);
-  assert.throws(() => validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', handoffRoute: { ...handoffRoute, targetSubject: 'agent.>' } }, ['pi']), /concrete NATS subject/);
-  assert.throws(() => validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', activity: 'handoff' }, ['pi']), /handoffId/);
+  assert.throws(() => validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', idleRoute: { ...idleRoute, targetSubject: 'agent.>' } }, ['pi']), /concrete NATS subject/);
 });
 
 test('feedback envelope is bounded and publisher flushes through the injected NATS client', async () => {
@@ -723,7 +619,7 @@ test('state: lock excludes a second process and recovers from a dead holder', as
   assert.equal(fs.existsSync(path.join(dir, 'lock')), false);
 });
 
-test('state: async lock stays exclusive across an awaited handoff publication', async (t) => {
+test('state: async lock stays exclusive across an awaited publication', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'state-async-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const order = [];

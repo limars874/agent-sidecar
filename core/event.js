@@ -35,18 +35,13 @@ export function validateEvent(raw, knownAgents) {
   if (raw.progressId !== undefined && raw.progressId !== null && !optionalString(raw.progressId)) {
     throw new Error('progressId must be a non-empty string or null');
   }
-  const activityAliases = { 'handoff-triggered': 'idle-prompt-triggered', handoff: 'idle-prompt' };
-  const legacyActivity = raw.activity === 'handoff-triggered' || raw.activity === 'handoff';
-  const activity = activityAliases[raw.activity] ?? raw.activity ?? 'work';
+  const activity = raw.activity ?? 'work';
   if (!['work', 'idle-prompt-triggered', 'idle-prompt'].includes(activity)) {
     throw new Error('activity must be "work", "idle-prompt-triggered" or "idle-prompt"');
   }
-  if (raw.idlePromptId !== undefined && raw.handoffId !== undefined) {
-    throw new Error('use only one of "idlePromptId" or legacy "handoffId"');
-  }
-  const idlePromptId = raw.idlePromptId ?? raw.handoffId;
+  const idlePromptId = raw.idlePromptId;
   if ((activity === 'idle-prompt-triggered' || activity === 'idle-prompt') && (typeof idlePromptId !== 'string' || idlePromptId === '')) {
-    throw new Error(legacyActivity ? 'handoffId is required for handoff events' : 'idlePromptId is required for idle prompt events');
+    throw new Error('idlePromptId is required for idle prompt events');
   }
   if (typeof idlePromptId === 'string' && idlePromptId.length > 256) throw new Error('idlePromptId is too long');
   const event = {
@@ -60,19 +55,10 @@ export function validateEvent(raw, knownAgents) {
   };
   if (raw.progressId !== undefined && raw.progressId !== null) event.progressId = raw.progressId;
   if (raw.activity !== undefined) event.activity = activity;
-  if (idlePromptId !== undefined && idlePromptId !== null) {
-    event.idlePromptId = idlePromptId;
-    if (raw.handoffId !== undefined) event.handoffId = idlePromptId;
-  }
+  if (idlePromptId !== undefined && idlePromptId !== null) event.idlePromptId = idlePromptId;
   const feedbackRoute = validateFeedbackRoute(raw.feedbackRoute, event.session);
   if (feedbackRoute) event.feedbackRoute = feedbackRoute;
-  if (raw.idleRoute !== undefined && raw.handoffRoute !== undefined) {
-    throw new Error('use only one of "idleRoute" or legacy "handoffRoute"');
-  }
-  const idleRoute = validateIdleRoute(raw.idleRoute ?? raw.handoffRoute, event.session);
-  if (idleRoute) {
-    event.idleRoute = idleRoute;
-    if (raw.handoffRoute !== undefined) event.handoffRoute = idleRoute;
-  }
+  const idleRoute = validateIdleRoute(raw.idleRoute, event.session);
+  if (idleRoute) event.idleRoute = idleRoute;
   return event;
 }

@@ -107,7 +107,7 @@ export function decodeIdlePromptMessage(data) {
 export function validateIdlePromptEnvelope(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('idle prompt payload must be an object');
   if (value.v !== IDLE_VERSION) throw new Error('unsupported idle prompt version');
-  if (value.type !== IDLE_TYPE && value.type !== 'idle-handoff') throw new Error('unsupported idle prompt type');
+  if (value.type !== IDLE_TYPE) throw new Error('unsupported idle prompt type');
   for (const key of ['id', 'instanceId', 'agent', 'session', 'planId', 'createdAt', 'prompt']) {
     if (typeof value[key] !== 'string' || value[key].trim() === '') throw new Error(`idle.${key} must be a non-empty string`);
     if (value[key].length > 512) throw new Error(`idle.${key} is too long`);
@@ -132,25 +132,12 @@ export function emptyIdlePromptState() {
   };
 }
 
-export function normalizeIdlePromptState(state) {
-  const next = structuredClone(state ?? {});
-  if (next.idle !== undefined && next.idleHandoff !== undefined) {
-    throw new Error('state contains both "idle" and legacy "idleHandoff"');
-  }
-  if (next.idle === undefined && next.idleHandoff !== undefined) {
-    next.idle = structuredClone(next.idleHandoff);
-    if (next.idle.plan) {
-      next.idle.plan.status = 'legacy';
-      next.idle.plan.legacyReason = 'idleHandoff state migration';
-    }
-    next.idle.inFlight = null;
-    delete next.idleHandoff;
-  }
-  return next;
+function cloneState(state) {
+  return structuredClone(state ?? {});
 }
 
 export function planIdlePrompt({ state, event, config, now = new Date(), planId = crypto.randomUUID() }) {
-  const next = normalizeIdlePromptState(state);
+  const next = cloneState(state);
   if (config.idle?.enabled !== true || (event.activity ?? 'work') !== 'work') {
     return { state: next, action: null };
   }
@@ -168,7 +155,7 @@ export function planIdlePrompt({ state, event, config, now = new Date(), planId 
   if (sameAsChecked) {
     return { state: next, action: null };
   }
-  if (sameAsLast && ['pending', 'error'].includes(current.plan?.status) && hasRoute && planRouteMatches) {
+  if (sameAsLast && current.plan?.status === 'pending' && hasRoute && planRouteMatches) {
     current.plan.status = 'pending';
     return {
       state: next,
@@ -178,7 +165,7 @@ export function planIdlePrompt({ state, event, config, now = new Date(), planId 
   if (sameAsLast && activePlan && planRouteMatches) {
     return { state: next, action: null };
   }
-  const shouldCreate = !sameAsLast || !current.plan || ['error', 'legacy'].includes(current.plan.status) || (hasRoute && !planRouteMatches);
+  const shouldCreate = !sameAsLast || !current.plan || (hasRoute && !planRouteMatches);
   current.lastWork = work;
   if (!shouldCreate || !hasRoute) {
     if (!hasRoute && !sameAsChecked) current.scheduleError = 'idle route unavailable';
@@ -211,7 +198,7 @@ export function planIdlePrompt({ state, event, config, now = new Date(), planId 
 }
 
 export function markIdlePromptScheduled(state, planId, now = new Date()) {
-  const next = normalizeIdlePromptState(state);
+  const next = cloneState(state);
   const current = (next.idle ??= emptyIdlePromptState());
   const plan = current.plan;
   if (plan?.id === planId && plan.status === 'pending') {
@@ -223,7 +210,7 @@ export function markIdlePromptScheduled(state, planId, now = new Date()) {
 }
 
 export function markIdlePromptScheduleFailed(state, planId, warning, now = new Date()) {
-  const next = normalizeIdlePromptState(state);
+  const next = cloneState(state);
   const current = (next.idle ??= emptyIdlePromptState());
   const plan = current.plan;
   if (plan?.id === planId) {
@@ -237,7 +224,7 @@ export function markIdlePromptScheduleFailed(state, planId, warning, now = new D
 }
 
 export function markIdlePromptTriggered(state, { idlePromptId, now = new Date() }) {
-  const next = normalizeIdlePromptState(state);
+  const next = cloneState(state);
   const current = (next.idle ??= emptyIdlePromptState());
   const planId = idlePromptId;
   const plan = current.plan;
@@ -253,7 +240,7 @@ export function markIdlePromptTriggered(state, { idlePromptId, now = new Date() 
 }
 
 export function completeIdlePrompt(state, { idlePromptId, now = new Date() }) {
-  const next = normalizeIdlePromptState(state);
+  const next = cloneState(state);
   const current = (next.idle ??= emptyIdlePromptState());
   const plan = current.plan;
   const inFlight = current.inFlight;
@@ -346,7 +333,7 @@ export async function deleteIdleConsumer(jsm, route) {
   }
 }
 
-export async function publishIdlePromptPlan({ config, event, plan, previousPlan, now = new Date(), connect = connectNats, manager = jetstreamManager, jsFactory = jetstream, timeoutMs = IDLE_TIMEOUT_MS, transportPrefix = 'agent-sidecar-idle' }) {
+export async function publishIdlePromptPlan({ config, event, plan, previousPlan, now = new Date(), connect = connectNats, manager = jetstreamManager, jsFactory = jetstream, timeoutMs = IDLE_TIMEOUT_MS }) {
   if (!event.idleRoute) return { scheduled: false, warning: 'idle route unavailable' };
   let connection;
   try {
@@ -367,14 +354,14 @@ export async function publishIdlePromptPlan({ config, event, plan, previousPlan,
       cancelHeaders.set('Nats-Schedule-Next', 'purge');
       cancelHeaders.set('Nats-Scheduler', previousPlan.route.scheduleSubject);
       await withTimeout(js.publish(previousPlan.route.controlSubject, Empty, {
-        msgID: `${transportPrefix}-cancel-${previousPlan.id}`,
+        msgID: `agent-sidecar-idle-cancel-${previousPlan.id}`,
         headers: cancelHeaders,
       }), timeoutMs, 'cancel');
     }
 
     const built = buildIdlePromptEnvelope({ event, plan, prompt: plan.prompt, now });
     await withTimeout(js.publish(plan.route.scheduleSubject, built.payload, {
-      msgID: `${transportPrefix}-${plan.id}`,
+      msgID: `agent-sidecar-idle-${plan.id}`,
       schedule: { specification: new Date(plan.deadline), target: plan.route.targetSubject },
     }), timeoutMs, 'schedule');
     return { scheduled: true, warning: null };
