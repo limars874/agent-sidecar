@@ -88,22 +88,22 @@ test('loadItems skips bad files and duplicates, keeps the rest', (t) => {
   assert.deepEqual(loadItems(path.join(dir, 'missing')), { items: [], errors: [] });
 });
 
-test('config: defaults, overrides, and errors', (t) => {
+test('config: generic idle defaults, overrides, aliases, and errors', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'config-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   assert.equal(loadConfig(dir).runner, 'pi');
   assert.equal(loadConfig(dir).effort, null);
   assert.equal(loadConfig(dir).model, null);
   assert.equal(loadConfig(dir).feedback.natsUrl, 'nats://127.0.0.1:4222');
-  const defaultHandoff = loadConfig(dir).idleHandoff;
-  assert.equal(defaultHandoff.enabled, false);
-  assert.equal(defaultHandoff.after, '60m');
-  assert.equal(defaultHandoff.afterMs, 60 * 60 * 1000);
-  assert.equal(typeof defaultHandoff.prompt, 'string');
+  const defaultIdle = loadConfig(dir).idle;
+  assert.equal(defaultIdle.enabled, false);
+  assert.equal(defaultIdle.after, '60m');
+  assert.equal(defaultIdle.afterMs, 60 * 60 * 1000);
+  assert.equal(defaultIdle.prompt, null);
   assert.deepEqual(loadConfig(dir).lifecycle, { clearTitleOnNew: true, clearTitleOnResume: true });
   fs.writeFileSync(
     path.join(dir, 'config.yaml'),
-    'runner: pi\neffort: high\nmodel: a/cheap\ntoolResultLines: 3\nfeedback:\n  natsUrl: nats://127.0.0.1:14222\nlifecycle:\n  clearTitleOnNew: false\n  clearTitleOnResume: true\nidleHandoff:\n  enabled: true\n  after: 2s\n  prompt: Check handoff\n',
+    'runner: pi\neffort: high\nmodel: a/cheap\ntoolResultLines: 3\nfeedback:\n  natsUrl: nats://127.0.0.1:14222\nlifecycle:\n  clearTitleOnNew: false\n  clearTitleOnResume: true\nidle:\n  enabled: true\n  after: 2s\n  prompt: Reply IDLE_OK\n',
   );
   const c = loadConfig(dir);
   assert.equal(c.runner, 'pi');
@@ -112,16 +112,24 @@ test('config: defaults, overrides, and errors', (t) => {
   assert.equal(c.toolResultLines, 3);
   assert.equal(c.feedback.natsUrl, 'nats://127.0.0.1:14222');
   assert.equal(c.timeoutMs, 120000);
-  assert.deepEqual(c.idleHandoff, { enabled: true, after: '2s', afterMs: 2000, prompt: 'Check handoff' });
+  assert.deepEqual(c.idle, { enabled: true, after: '2s', afterMs: 2000, prompt: 'Reply IDLE_OK' });
   assert.deepEqual(c.lifecycle, { clearTitleOnNew: false, clearTitleOnResume: true });
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'idleHandoff:\n  enabled: true\n  after: 2s\n  prompt: Legacy prompt\n');
+  const legacy = loadConfig(dir);
+  assert.deepEqual(legacy.idle, { enabled: true, after: '2s', afterMs: 2000, prompt: 'Legacy prompt' });
+  assert.match(legacy.warnings[0], /deprecated/);
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'idle:\n  enabled: true\n  after: 2s\n');
+  assert.throws(() => loadConfig(dir), /idle.prompt is required when idle.enabled is true/);
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'idle:\n  enabled: true\n  after: forever\n  prompt: x\n');
+  assert.throws(() => loadConfig(dir), /invalid value for "idle.after"/);
+  fs.writeFileSync(path.join(dir, 'config.yaml'), 'idle:\n  enabled: true\n  prompt: x\nidleHandoff:\n  enabled: false\n');
+  assert.throws(() => loadConfig(dir), /only one of "idle" or deprecated "idleHandoff"/);
   fs.writeFileSync(path.join(dir, 'config.yaml'), 'lifecycle:\n  clearTitleOnStart: false\n');
   assert.throws(() => loadConfig(dir), /unknown key "lifecycle.clearTitleOnStart"/);
   fs.writeFileSync(path.join(dir, 'config.yaml'), 'lifecycle:\n  clearTitleOnNew: yes\n');
   assert.throws(() => loadConfig(dir), /invalid value for "lifecycle.clearTitleOnNew"/);
   fs.writeFileSync(path.join(dir, 'config.yaml'), 'effort: ""\n');
   assert.throws(() => loadConfig(dir), /invalid value for "effort"/);
-  fs.writeFileSync(path.join(dir, 'config.yaml'), 'idleHandoff:\n  enabled: true\n  after: forever\n');
-  assert.throws(() => loadConfig(dir), /invalid value for "idleHandoff.after"/);
   fs.writeFileSync(path.join(dir, 'config.yaml'), 'modle: x\n');
   assert.throws(() => loadConfig(dir), /unknown key "modle"/);
   fs.writeFileSync(path.join(dir, 'config.json'), '{}');

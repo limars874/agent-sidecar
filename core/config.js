@@ -13,11 +13,13 @@ export const DEFAULT_FEEDBACK = Object.freeze({
   natsUrl: 'nats://127.0.0.1:4222',
 });
 
-export const DEFAULT_IDLE_HANDOFF = Object.freeze({
+export const DEFAULT_IDLE = Object.freeze({
   enabled: false,
   after: '60m',
-  prompt: 'Review the current session. Decide whether important context should be written to or updated in a Handoff document. If not, do nothing. Do not continue the original task or start unrelated development work.',
+  prompt: null,
 });
+// Compatibility export for extensions that imported the old constant.
+export const DEFAULT_IDLE_HANDOFF = DEFAULT_IDLE;
 
 export const DEFAULTS = Object.freeze({
   runner: 'pi',
@@ -28,7 +30,7 @@ export const DEFAULTS = Object.freeze({
   toolResultLines: 20,
   feedback: DEFAULT_FEEDBACK,
   lifecycle: DEFAULT_LIFECYCLE,
-  idleHandoff: DEFAULT_IDLE_HANDOFF,
+  idle: DEFAULT_IDLE,
 });
 
 const CHECKS = {
@@ -49,7 +51,7 @@ const FEEDBACK_CHECKS = {
   natsUrl: (v) => typeof v === 'string' && v.trim() !== '',
 };
 
-const IDLE_HANDOFF_CHECKS = {
+const IDLE_CHECKS = {
   enabled: (v) => typeof v === 'boolean',
   after: (v) => typeof v === 'string' && parseDurationMs(v) !== null,
   prompt: (v) => typeof v === 'string' && v.trim() !== '' && Buffer.byteLength(v, 'utf8') <= 8 * 1024,
@@ -74,13 +76,13 @@ function validateFeedback(value, file) {
   }
 }
 
-function validateIdleHandoff(value, file) {
+function validateIdle(value, file, name = 'idle') {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`${file}: invalid value for "idleHandoff"`);
+    throw new Error(`${file}: invalid value for "${name}"`);
   }
   for (const [key, setting] of Object.entries(value)) {
-    if (!(key in IDLE_HANDOFF_CHECKS)) throw new Error(`${file}: unknown key "idleHandoff.${key}"`);
-    if (!IDLE_HANDOFF_CHECKS[key](setting)) throw new Error(`${file}: invalid value for "idleHandoff.${key}"`);
+    if (!(key in IDLE_CHECKS)) throw new Error(`${file}: unknown key "${name}.${key}"`);
+    if (!IDLE_CHECKS[key](setting)) throw new Error(`${file}: invalid value for "${name}.${key}"`);
   }
 }
 
@@ -94,15 +96,21 @@ function validateLifecycle(value, file) {
   }
 }
 
+function addLegacyIdleAlias(config) {
+  Object.defineProperty(config, 'idleHandoff', { value: config.idle, enumerable: false, configurable: true });
+  return config;
+}
+
 export function loadConfig(root) {
   const found = CONFIG_FILES.map((name) => path.join(root, name))
     .map((file) => ({ file, text: readFileIfExists(file) }))
     .filter((f) => f.text !== undefined);
   if (found.length === 0) {
-    return {
+    return addLegacyIdleAlias({
       ...DEFAULTS,
-      idleHandoff: { ...DEFAULT_IDLE_HANDOFF, afterMs: parseDurationMs(DEFAULT_IDLE_HANDOFF.after) },
-    };
+      idle: { ...DEFAULT_IDLE, afterMs: parseDurationMs(DEFAULT_IDLE.after) },
+      warnings: [],
+    });
   }
   if (found.length > 1) throw new Error(`more than one config file in ${root}: ${found.map((f) => path.basename(f.file)).join(', ')}`);
 
@@ -122,22 +130,38 @@ export function loadConfig(root) {
       validateFeedback(value, file);
       continue;
     }
+    if (key === 'idle') {
+      validateIdle(value, file);
+      continue;
+    }
     if (key === 'idleHandoff') {
-      validateIdleHandoff(value, file);
+      validateIdle(value, file, 'idleHandoff');
       continue;
     }
     if (!(key in CHECKS)) throw new Error(`${file}: unknown key "${key}"`);
     if (!CHECKS[key](value)) throw new Error(`${file}: invalid value for "${key}"`);
   }
-  return {
+
+  const hasIdle = Object.prototype.hasOwnProperty.call(raw, 'idle');
+  const hasLegacyIdle = Object.prototype.hasOwnProperty.call(raw, 'idleHandoff');
+  if (hasIdle && hasLegacyIdle) throw new Error(`${file}: configure only one of "idle" or deprecated "idleHandoff"`);
+  const idleRaw = raw.idle ?? raw.idleHandoff ?? {};
+  const idle = {
+    ...DEFAULT_IDLE,
+    ...idleRaw,
+    afterMs: parseDurationMs(idleRaw.after ?? DEFAULT_IDLE.after),
+  };
+  if (idle.enabled && (typeof idle.prompt !== 'string' || idle.prompt.trim() === '')) {
+    throw new Error(`${file}: idle.prompt is required when idle.enabled is true`);
+  }
+
+  const { idle: _idle, idleHandoff: _legacyIdle, ...base } = raw;
+  return addLegacyIdleAlias({
     ...DEFAULTS,
-    ...raw,
+    ...base,
     feedback: { ...DEFAULT_FEEDBACK, ...(raw.feedback ?? {}) },
     lifecycle: { ...DEFAULT_LIFECYCLE, ...(raw.lifecycle ?? {}) },
-    idleHandoff: {
-      ...DEFAULT_IDLE_HANDOFF,
-      ...(raw.idleHandoff ?? {}),
-      afterMs: parseDurationMs((raw.idleHandoff ?? DEFAULT_IDLE_HANDOFF).after ?? DEFAULT_IDLE_HANDOFF.after),
-    },
-  };
+    idle,
+    warnings: hasLegacyIdle ? ['config key "idleHandoff" is deprecated; use "idle"'] : [],
+  });
 }

@@ -20,6 +20,14 @@ import {
   publishIdleHandoffPlan,
 } from '../core/idle-handoff.js';
 import { emptyState, planEvent } from '../core/scheduler.js';
+import {
+  buildIdlePromptEnvelope,
+  completeIdlePrompt,
+  createIdleRoute,
+  markIdlePromptScheduled,
+  markIdlePromptTriggered,
+  planIdlePrompt,
+} from '../core/idle-prompt.js';
 import { readState, runIsStale, updateState, updateStateAsync, withLock } from '../core/state.js';
 import { countTurns, renderTranscript, sliceTurns } from '../core/transcript.js';
 import { DEFAULT_RUNNER, getRunner, resolveRunnerName } from '../runners/index.js';
@@ -69,7 +77,7 @@ test('scheduler: a shorter branch restarts counting', () => {
   assert.equal(r.state.items.a.lastTurn, 3);
 });
 
-test('idle handoff: one plan per new work progress and one completion', () => {
+test('legacy idle-handoff state compatibility: one plan per progress and one completion', () => {
   const route = createHandoffRoute('s', { instanceId: 'instance-a', replySubject: '_INBOX.handoff-a' });
   const config = { idleHandoff: { enabled: true, after: '1m', afterMs: 60_000, prompt: 'Check handoff' } };
   const event = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
@@ -104,7 +112,7 @@ test('idle handoff: one plan per new work progress and one completion', () => {
   assert.notEqual(next.action.plan.route.scheduleSubject, first.action.plan.route.scheduleSubject);
 });
 
-test('idle handoff: pending plans retry and replacement carries the cancellation target', () => {
+test('legacy idle-handoff state compatibility: pending replacement keeps cancellation target', () => {
   const route = createHandoffRoute('s', { instanceId: 'instance-a', replySubject: '_INBOX.handoff-a' });
   const config = { idleHandoff: { enabled: true, afterMs: 60_000, prompt: 'Check handoff' } };
   const firstEvent = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
@@ -135,7 +143,7 @@ test('idle handoff: pending plans retry and replacement carries the cancellation
   assert.equal(restarted.action.plan.route.instanceId, 'instance-b');
 });
 
-test('idle handoff publisher cancels the old schedule before publishing the replacement', async () => {
+test('legacy idle-handoff publisher compatibility: cancels before replacement', async () => {
   const route = createHandoffRoute('s', { instanceId: 'instance-a', replySubject: '_INBOX.handoff-a' });
   const previous = { id: 'plan-1', route: { ...route, scheduleSubject: `${route.scheduleSubject}.plan.plan-1` } };
   const plan = {
@@ -184,7 +192,7 @@ test('idle handoff publisher cancels the old schedule before publishing the repl
   assert.equal(closed, 1);
 });
 
-test('idle handoff: an unknown initial publish result retries the same plan id', async () => {
+test('legacy idle-handoff compatibility: unknown publish retries the same plan id', async () => {
   const route = createHandoffRoute('s', { instanceId: 'instance-timeout', replySubject: '_INBOX.timeout' });
   const event = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
   const config = { idleHandoff: { enabled: true, afterMs: 60_000, prompt: 'Check handoff' } };
@@ -222,7 +230,7 @@ test('idle handoff: an unknown initial publish result retries the same plan id',
   assert.equal(migratedRetry.state.idleHandoff.plan.status, 'pending');
 });
 
-test('idle handoff: cancel success plus schedule timeout preserves replacement idempotency', async () => {
+test('legacy idle-handoff compatibility: cancel success plus timeout preserves idempotency', async () => {
   const route = createHandoffRoute('s', { instanceId: 'instance-replace-timeout', replySubject: '_INBOX.replace-timeout' });
   const config = { idleHandoff: { enabled: true, afterMs: 60_000, prompt: 'Check handoff' } };
   const firstEvent = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
@@ -263,7 +271,7 @@ test('idle handoff: cancel success plus schedule timeout preserves replacement i
   assert.equal(retry.action.previousPlan.id, 'plan-old');
 });
 
-test('idle handoff: lifecycle events are idempotent and tolerate reordering', () => {
+test('legacy idle-handoff lifecycle compatibility: idempotent and reorder-safe', () => {
   const route = createHandoffRoute('s', { instanceId: 'instance-lifecycle', replySubject: '_INBOX.lifecycle' });
   const config = { idleHandoff: { enabled: true, afterMs: 60_000, prompt: 'Check handoff' } };
   const event = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
@@ -300,6 +308,34 @@ test('idle handoff: lifecycle events are idempotent and tolerate reordering', ()
   assert.equal(completeIdleHandoff(completed.state, { handoffId: 'plan-lifecycle-2' }).matched, false);
 });
 
+test('generic idle prompt: schedules, wakes, completes, and keeps the prompt opaque', () => {
+  const route = createIdleRoute('s', { instanceId: 'instance-idle', replySubject: '_INBOX.idle' });
+  const config = { idle: { enabled: true, after: '1m', afterMs: 60_000, prompt: 'Reply IDLE_OK' } };
+  const event = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', idleRoute: route };
+  const first = planIdlePrompt({ state: emptyState(), event, config, now: '2026-10-12T12:00:00.000Z', planId: 'idle-1' });
+  assert.equal(first.action.type, 'schedule');
+  assert.equal(first.action.plan.prompt, 'Reply IDLE_OK');
+  assert.notEqual(first.action.plan.route.scheduleSubject, route.scheduleSubject);
+  const scheduled = markIdlePromptScheduled(first.state, 'idle-1');
+  const triggered = markIdlePromptTriggered(scheduled, { idlePromptId: 'idle-1' });
+  const completed = completeIdlePrompt(triggered.state, { idlePromptId: 'idle-1' });
+  assert.equal(completed.matched, true);
+  assert.equal(completed.state.idle.plan, null);
+  assert.equal(completed.state.idle.lastCheck.documentWritten, null);
+  const envelope = buildIdlePromptEnvelope({ event, plan: first.action.plan, prompt: first.action.plan.prompt });
+  assert.equal(envelope.envelope.type, 'idle-prompt');
+  assert.equal(envelope.envelope.prompt, 'Reply IDLE_OK');
+});
+
+test('generic idle prompt: legacy state migrates without duplicate idle state', () => {
+  const legacy = { v: 1, items: {}, idleHandoff: { lastWork: null, lastCheck: null, inFlight: null, plan: null, scheduleError: null } };
+  const config = { idle: { enabled: false, afterMs: 60_000, prompt: 'x' } };
+  const result = planIdlePrompt({ state: legacy, event: { agent: 'pi', session: 's', turn: 1 }, config });
+  assert.equal(result.state.idle !== undefined, true);
+  assert.equal(result.state.idleHandoff, undefined);
+  assert.equal(result.action, null);
+});
+
 test('transcript: turns, slicing and rendering', () => {
   const messages = [
     { role: 'user', text: 'one' },
@@ -332,12 +368,15 @@ test('event validation', () => {
   assert.throws(() => validateEvent({ ...ok, model: 3 }, ['pi']), /model/);
 });
 
-test('feedback and handoff routes are optional and validated against the session', () => {
+test('feedback and legacy idle routes are optional and validated against the session', () => {
   const route = { v: 1, instanceId: 'instance-a', replySubject: '_INBOX.route-a', session: 's' };
   assert.deepEqual(validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', feedbackRoute: route }, ['pi']).feedbackRoute, route);
   assert.throws(() => validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', feedbackRoute: { ...route, session: 'other' } }, ['pi']), /match event.session/);
   assert.throws(() => validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', feedbackRoute: { ...route, replySubject: '_INBOX.*' } }, ['pi']), /concrete NATS subject/);
 
+  const idleRoute = createIdleRoute('s', { instanceId: 'instance-idle-event', replySubject: '_INBOX.idle-event' });
+  assert.deepEqual(validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', idleRoute }, ['pi']).idleRoute, idleRoute);
+  assert.throws(() => validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', activity: 'idle-prompt' }, ['pi']), /idlePromptId/);
   const handoffRoute = createHandoffRoute('s', { instanceId: 'instance-handoff', replySubject: '_INBOX.handoff' });
   assert.deepEqual(validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', handoffRoute }, ['pi']).handoffRoute, handoffRoute);
   assert.throws(() => validateEvent({ v: 1, agent: 'pi', session: 's', transcriptRef: '/f', handoffRoute: { ...handoffRoute, targetSubject: 'agent.>' } }, ['pi']), /concrete NATS subject/);

@@ -6,13 +6,11 @@ timeoutMs: 120000                     # per model call or script
 maxTranscriptChars: 60000             # fallback context budget; items can override it with context.maxChars
 toolResultLines: 20                   # tool output lines kept per tool result
 # feedback:
-#   natsUrl: nats://127.0.0.1:4222    # local NATS broker for feedback and idle handoff
-# idleHandoff:
-#   enabled: true                      # opt in to automatic idle judgment calls
+#   natsUrl: nats://127.0.0.1:4222    # local NATS broker for feedback and idle prompt
+# idle:
+#   enabled: true                      # opt in to the delayed prompt
 #   after: 60m                         # delay after normal work completes
-#   prompt: >-
-#     Review the current session. Decide whether important context should be
-#     written to or updated in a Handoff document. If not, do nothing.
+#   prompt: Reply with IDLE_OK.         # task content is passed through unchanged
 lifecycle:
   clearTitleOnNew: true                # clear the pane label and sidecar title on /new
   clearTitleOnResume: true             # clear them on /resume too

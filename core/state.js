@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { emptyState } from './scheduler.js';
+import { normalizeIdlePromptState } from './idle-prompt.js';
 
 const LOCK_WAIT_MS = 10000;
 const LOCK_STALE_MS = 30000;
@@ -11,7 +12,7 @@ export const RUN_STALE_MS = 30 * 60 * 1000;
 
 export function readState(dir) {
   try {
-    return JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));
+    return normalizeIdlePromptState(JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')));
   } catch (err) {
     if (err.code === 'ENOENT') return emptyState();
     throw err;

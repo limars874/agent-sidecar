@@ -317,9 +317,9 @@ test('extension: drops feedback from the previous session after a switch', async
   assert.match(messages[0][0].content, /new/);
 });
 
-test('extension: delivers an idle handoff with an active Pi wake', async (t) => {
+test('extension: delivers a generic idle prompt with an active Pi wake', async (t) => {
   const box = sandbox(t);
-  box.config('idleHandoff:\n  enabled: true\n  after: 1m\n  prompt: Check whether a handoff is needed\n');
+  box.config('idle:\n  enabled: true\n  after: 1m\n  prompt: Reply IDLE_OK\n');
   const messages = [];
   const subscriptions = [];
   let nextMessage;
@@ -365,7 +365,7 @@ test('extension: delivers an idle handoff with an active Pi wake', async (t) => 
   createExtension(box.env, {
     connectNats: async () => connection,
     jetstreamManager: async () => manager,
-    createHandoffRoute: () => route,
+    createIdleRoute: () => route,
     spawn: (_command, args) => {
       emitted.push(JSON.parse(args[args.indexOf('--json') + 1]));
       return { on() {}, unref() {} };
@@ -378,7 +378,7 @@ test('extension: delivers an idle handoff with an active Pi wake', async (t) => 
 
   nextMessage({ value: { data: new TextEncoder().encode(JSON.stringify({
     v: 1,
-    type: 'idle-handoff',
+    type: 'idle-prompt',
     id: 'delivery-1',
     instanceId: route.instanceId,
     agent: 'pi',
@@ -387,18 +387,18 @@ test('extension: delivers an idle handoff with an active Pi wake', async (t) => 
     workTurn: 2,
     progressId: null,
     createdAt: '2026-10-12T12:00:00.000Z',
-    prompt: 'Check whether a handoff is needed',
+    prompt: 'Reply IDLE_OK',
   })) }, done: false });
   await waitFor(() => messages.length === 1);
-  assert.equal(messages[0][0].customType, 'agent-sidecar-handoff');
+  assert.equal(messages[0][0].customType, 'agent-sidecar-idle-prompt');
   assert.equal(messages[0][1].deliverAs, 'steer');
   assert.equal(messages[0][1].triggerTurn, true);
-  assert.equal(emitted[0].activity, 'handoff-triggered');
+  assert.equal(emitted[0].activity, 'idle-prompt-triggered');
 
   await waitFor(() => typeof nextMessage === 'function');
   nextMessage({ value: { data: new TextEncoder().encode(JSON.stringify({
     v: 1,
-    type: 'idle-handoff',
+    type: 'idle-prompt',
     id: 'delivery-duplicate-before-completion',
     instanceId: route.instanceId,
     agent: 'pi',
@@ -407,21 +407,21 @@ test('extension: delivers an idle handoff with an active Pi wake', async (t) => 
     workTurn: 2,
     progressId: null,
     createdAt: '2026-10-12T12:00:01.000Z',
-    prompt: 'Duplicate handoff',
+    prompt: 'Duplicate idle prompt',
   })) }, done: false });
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(messages.length, 1, 'the same plan is not woken twice before completion');
 
   await pi.handlers.agent_settled({ aborted: true }, ctx);
-  assert.equal(emitted.length, 1, 'an aborted handoff must not be marked completed');
+  assert.equal(emitted.length, 1, 'an aborted idle prompt must not be marked completed');
   await pi.handlers.agent_settled({ aborted: false }, ctx);
-  assert.equal(emitted[1].activity, 'handoff');
-  assert.equal(emitted[1].handoffId, 'plan-1');
+  assert.equal(emitted[1].activity, 'idle-prompt');
+  assert.equal(emitted[1].idlePromptId, 'plan-1');
 
   await waitFor(() => typeof nextMessage === 'function');
   nextMessage({ value: { data: new TextEncoder().encode(JSON.stringify({
     v: 1,
-    type: 'idle-handoff',
+    type: 'idle-prompt',
     id: 'delivery-duplicate-after-completion',
     instanceId: route.instanceId,
     agent: 'pi',
@@ -430,16 +430,16 @@ test('extension: delivers an idle handoff with an active Pi wake', async (t) => 
     workTurn: 2,
     progressId: null,
     createdAt: '2026-10-12T12:00:02.000Z',
-    prompt: 'Completed handoff replay',
+    prompt: 'Completed idle prompt replay',
   })) }, done: false });
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(messages.length, 1, 'a completed plan is not woken again');
 });
 
-test('extension: keeps Feedback V1 when idle-handoff JetStream setup fails', async (t) => {
+test('extension: keeps Feedback V1 when idle-prompt JetStream setup fails', async (t) => {
   const box = sandbox(t);
   box.item('review.yaml', 'everyTurns: 1\nfeedback: true\nprompt: Review\noutput: none\n');
-  box.config('idleHandoff:\n  enabled: true\n  after: 1m\n');
+  box.config('idle:\n  enabled: true\n  after: 1m\n  prompt: Reply IDLE_OK\n');
   const subscriptions = [];
   let closed = 0;
   const connection = {
@@ -455,7 +455,7 @@ test('extension: keeps Feedback V1 when idle-handoff JetStream setup fails', asy
     async close() { closed += 1; },
   };
   const feedbackRoute = { v: 1, instanceId: 'feedback-instance', replySubject: '_INBOX.feedback', session: PI_SESSION_ID };
-  const handoffRoute = {
+  const idleRoute = {
     v: 1,
     instanceId: 'handoff-instance',
     replySubject: '_INBOX.handoff',
@@ -475,7 +475,7 @@ test('extension: keeps Feedback V1 when idle-handoff JetStream setup fails', asy
   createExtension(box.env, {
     connectNats: async () => connection,
     createFeedbackRoute: () => feedbackRoute,
-    createHandoffRoute: () => handoffRoute,
+    createIdleRoute: () => idleRoute,
     jetstreamManager: async () => manager,
   })(pi);
   await pi.handlers.session_start({}, fakeCtx());
