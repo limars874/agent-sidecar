@@ -47,6 +47,13 @@ function currentTurnAndProgress(ctx) {
   };
 }
 
+function readCompletedHandoffIds(ctx) {
+  const entries = ctx.sessionManager.getBranch?.() ?? ctx.sessionManager.getEntries?.() ?? [];
+  return new Set(entries
+    .filter((entry) => entry?.type === 'custom' && entry.customType === 'agent-sidecar-handoff' && entry.data?.status === 'completed' && typeof entry.data.id === 'string')
+    .map((entry) => entry.data.id));
+}
+
 function readPendingHandoff(ctx) {
   const entries = ctx.sessionManager.getBranch?.() ?? ctx.sessionManager.getEntries?.() ?? [];
   const seenIds = new Set();
@@ -153,6 +160,7 @@ function register(pi, env, dependencies = {}) {
   let feedbackWarningShown = false;
   const seenFeedbackIds = new Set();
   const seenHandoffIds = new Set();
+  const completedHandoffIds = new Set();
 
   const warnFeedback = (ctx, message) => {
     if (feedbackWarningShown) return;
@@ -284,7 +292,7 @@ function register(pi, env, dependencies = {}) {
       console.warn('agent-sidecar idle handoff: Pi is no longer idle; message dropped');
       return;
     }
-    if (seenHandoffIds.has(envelope.id)) return;
+    if (completedHandoffIds.has(envelope.planId) || handoffInFlight?.id === envelope.planId || seenHandoffIds.has(envelope.id)) return;
     seenHandoffIds.add(envelope.id);
     if (seenHandoffIds.size > 100) seenHandoffIds.delete(seenHandoffIds.values().next().value);
 
@@ -540,6 +548,10 @@ function register(pi, env, dependencies = {}) {
   pi.on('session_start', async (event, ctx) => {
     await stopFeedback();
     activeSession = currentSessionId(ctx);
+    seenFeedbackIds.clear();
+    seenHandoffIds.clear();
+    completedHandoffIds.clear();
+    for (const handoffId of readCompletedHandoffIds(ctx)) completedHandoffIds.add(handoffId);
     handoffInFlight = readPendingHandoff(ctx);
     void startFeedback(ctx);
     if (!ctx.hasUI) return;
@@ -552,6 +564,7 @@ function register(pi, env, dependencies = {}) {
     const isHandoff = pending && progress.turn === pending.workTurn && (!pending.progressId || pending.progressId === progress.progressId);
     if (isHandoff && !event.aborted) {
       handoffInFlight = null;
+      completedHandoffIds.add(pending.id);
       appendHandoffMarker(pi, { v: 1, id: pending.id, workTurn: pending.workTurn, status: 'completed' });
       await emit(ctx, { activity: 'handoff', handoffId: pending.id });
       return;

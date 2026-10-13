@@ -55,9 +55,9 @@ One developer running agent sessions (initially Pi) in terminals or Herdr panes,
 | R31 | Let the agent decide whether a Handoff document is useful. | The wake is one judgment call; the agent may create/update a Handoff document or write nothing. The sidecar never fabricates the document. |
 | R32 | Prevent duplicate checks and self-trigger loops. | One work batch produces at most one check; `handoff-triggered` and `handoff` events never schedule items or re-arm idle handoff; later normal work re-arms eligibility. |
 | R33 | Use native NATS 2.15 JetStream scheduling with cancel-and-rebuild. | A shared file stream allows schedules; old plans are cancelled through a separate control subject before replacement, with expiry re-validation and no polling or daemon fallback. |
-| R34 | Track handoff lifecycle separately from item execution. | Per-session state records work progress, plan, in-flight check and completed check; it distinguishes check completion from whether a document was written, and reports transport failures explicitly. |
+| R34 | Track handoff lifecycle separately from item execution. | Per-session state records work progress, plan, in-flight check and completed check; it distinguishes check completion from whether a document was written, retains the same plan id across unknown publication results, and reports transport failures explicitly. |
 | R35 | Keep Feedback V1 semantics unchanged and distinguish message types. | Feedback remains advisory `nextTurn`/`steer` delivery without an idle wake; idle handoff uses a separate `idle-handoff` envelope and `agent-sidecar-handoff` Pi message. |
-| R36 | Verify idle handoff against the real environment. | Tests cover state, cancellation and routing with mocks; acceptance includes a real NATS 2.15 + Pi idle-wake smoke test. |
+| R36 | Verify idle handoff against the real environment. | Tests cover state, cancellation, unknown publication results, lifecycle reordering and routing with mocks; acceptance includes a real NATS 2.15 + Pi idle-wake smoke test. |
 
 ## Non-goals (v1)
 

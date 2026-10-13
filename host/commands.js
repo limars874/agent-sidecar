@@ -99,7 +99,7 @@ export async function handleEvent(rawEvent, { root, env, foreground = false, fee
         connect: handoffConnect,
         manager: handoffManager,
       });
-      handoff = { status: result.scheduled ? 'scheduled' : 'error', warning: result.warning };
+      handoff = { status: result.scheduled ? 'scheduled' : 'pending', warning: result.warning };
       finalState = result.scheduled
         ? markIdleHandoffScheduled(finalState, handoffPlan.action.plan.id)
         : markIdleHandoffScheduleFailed(finalState, handoffPlan.action.plan.id, result.warning);

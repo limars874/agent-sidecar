@@ -14,6 +14,7 @@ import {
   completeIdleHandoff,
   createHandoffRoute,
   markIdleHandoffScheduled,
+  markIdleHandoffScheduleFailed,
   markIdleHandoffTriggered,
   planIdleHandoff,
   publishIdleHandoffPlan,
@@ -178,6 +179,122 @@ test('idle handoff publisher cancels the old schedule before publishing the repl
   assert.equal(calls[1].options.schedule.target, route.targetSubject);
   assert.equal(calls[1].options.msgID, 'agent-sidecar-handoff-plan-2');
   assert.equal(closed, 1);
+});
+
+test('idle handoff: an unknown initial publish result retries the same plan id', async () => {
+  const route = createHandoffRoute('s', { instanceId: 'instance-timeout', replySubject: '_INBOX.timeout' });
+  const event = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
+  const config = { idleHandoff: { enabled: true, afterMs: 60_000, prompt: 'Check handoff' } };
+  const first = planIdleHandoff({ state: emptyState(), event, config, planId: 'plan-timeout' });
+  const manager = {
+    streams: {
+      async info() {
+        return { config: { subjects: ['agent-sidecar.handoff.>'], allow_msg_schedules: true, allow_rollup_hdrs: true } };
+      },
+    },
+  };
+  const result = await publishIdleHandoffPlan({
+    config: { feedback: { natsUrl: 'nats://127.0.0.1:4222' } },
+    event,
+    plan: first.action.plan,
+    previousPlan: null,
+    manager: async () => manager,
+    jsFactory: () => ({ publish: () => new Promise(() => {}) }),
+    connect: async () => ({ async close() {} }),
+    timeoutMs: 10,
+  });
+  assert.equal(result.scheduled, false);
+  assert.match(result.warning, /schedule timed out/);
+  const pending = markIdleHandoffScheduleFailed(first.state, 'plan-timeout', result.warning, '2026-10-12T12:00:01.000Z');
+  assert.equal(pending.idleHandoff.plan.status, 'pending');
+  assert.equal(pending.idleHandoff.plan.id, 'plan-timeout');
+  assert.equal(pending.idleHandoff.plan.scheduleAttempts, 1);
+  const retry = planIdleHandoff({ state: pending, event, config, planId: 'must-not-replace' });
+  assert.equal(retry.action.plan.id, 'plan-timeout');
+
+  const legacyError = structuredClone(pending);
+  legacyError.idleHandoff.plan.status = 'error';
+  const migratedRetry = planIdleHandoff({ state: legacyError, event, config, planId: 'must-not-replace-either' });
+  assert.equal(migratedRetry.action.plan.id, 'plan-timeout');
+  assert.equal(migratedRetry.state.idleHandoff.plan.status, 'pending');
+});
+
+test('idle handoff: cancel success plus schedule timeout preserves replacement idempotency', async () => {
+  const route = createHandoffRoute('s', { instanceId: 'instance-replace-timeout', replySubject: '_INBOX.replace-timeout' });
+  const config = { idleHandoff: { enabled: true, afterMs: 60_000, prompt: 'Check handoff' } };
+  const firstEvent = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
+  const first = planIdleHandoff({ state: emptyState(), event: firstEvent, config, planId: 'plan-old' });
+  const scheduled = markIdleHandoffScheduled(first.state, 'plan-old');
+  const secondEvent = { ...firstEvent, turn: 2, progressId: 'user-2' };
+  const second = planIdleHandoff({ state: scheduled, event: secondEvent, config, planId: 'plan-new' });
+  const calls = [];
+  const manager = {
+    streams: {
+      async info() {
+        return { config: { subjects: ['agent-sidecar.handoff.>'], allow_msg_schedules: true, allow_rollup_hdrs: true } };
+      },
+    },
+  };
+  const result = await publishIdleHandoffPlan({
+    config: { feedback: { natsUrl: 'nats://127.0.0.1:4222' } },
+    event: secondEvent,
+    plan: second.action.plan,
+    previousPlan: second.action.previousPlan,
+    manager: async () => manager,
+    jsFactory: () => ({
+      publish(subject, payload, options) {
+        calls.push({ subject, options });
+        return calls.length === 1 ? Promise.resolve({}) : new Promise(() => {});
+      },
+    }),
+    connect: async () => ({ async close() {} }),
+    timeoutMs: 10,
+  });
+  assert.equal(result.scheduled, false);
+  assert.equal(calls.length, 2, 'cancel succeeds before schedule reaches its timeout');
+  const pending = markIdleHandoffScheduleFailed(second.state, 'plan-new', result.warning);
+  assert.equal(pending.idleHandoff.plan.id, 'plan-new');
+  assert.equal(pending.idleHandoff.plan.status, 'pending');
+  const retry = planIdleHandoff({ state: pending, event: secondEvent, config, planId: 'must-not-replace' });
+  assert.equal(retry.action.plan.id, 'plan-new');
+  assert.equal(retry.action.previousPlan.id, 'plan-old');
+});
+
+test('idle handoff: lifecycle events are idempotent and tolerate reordering', () => {
+  const route = createHandoffRoute('s', { instanceId: 'instance-lifecycle', replySubject: '_INBOX.lifecycle' });
+  const config = { idleHandoff: { enabled: true, afterMs: 60_000, prompt: 'Check handoff' } };
+  const event = { agent: 'pi', session: 's', activity: 'work', turn: 1, progressId: 'user-1', handoffRoute: route };
+  const first = planIdleHandoff({ state: emptyState(), event, config, planId: 'plan-lifecycle-1' });
+
+  // 分离的 trigger event 可能晚于 completion 抵达 CLI。
+  const completedBeforeTrigger = completeIdleHandoff(first.state, { handoffId: 'plan-lifecycle-1', now: '2026-10-12T12:01:00.000Z' });
+  assert.equal(completedBeforeTrigger.matched, true);
+  assert.equal(markIdleHandoffTriggered(completedBeforeTrigger.state, { planId: 'plan-lifecycle-1' }).matched, false);
+
+  const second = planIdleHandoff({
+    state: completedBeforeTrigger.state,
+    event: { ...event, turn: 2, progressId: 'user-2' },
+    config,
+    planId: 'plan-lifecycle-2',
+  });
+  const triggered = markIdleHandoffTriggered(second.state, { planId: 'plan-lifecycle-2', now: '2026-10-12T12:02:00.000Z' });
+  const duplicateTrigger = markIdleHandoffTriggered(triggered.state, { planId: 'plan-lifecycle-2', now: '2026-10-12T12:03:00.000Z' });
+  assert.equal(duplicateTrigger.matched, true);
+  assert.equal(duplicateTrigger.state.idleHandoff.plan.triggeredAt, '2026-10-12T12:02:00.000Z');
+
+  const replacement = planIdleHandoff({
+    state: duplicateTrigger.state,
+    event: { ...event, turn: 3, progressId: 'user-3' },
+    config,
+    planId: 'plan-lifecycle-3',
+  });
+  const wrongCompletion = completeIdleHandoff(replacement.state, { handoffId: 'plan-lifecycle-3' });
+  assert.equal(wrongCompletion.matched, false, 'a completion for a newer plan cannot erase an older in-flight check');
+  assert.equal(wrongCompletion.state.idleHandoff.inFlight.id, 'plan-lifecycle-2');
+  const completed = completeIdleHandoff(wrongCompletion.state, { handoffId: 'plan-lifecycle-2', now: '2026-10-12T12:04:00.000Z' });
+  assert.equal(completed.matched, true);
+  assert.equal(completed.state.idleHandoff.plan.id, 'plan-lifecycle-3');
+  assert.equal(completeIdleHandoff(completed.state, { handoffId: 'plan-lifecycle-2' }).matched, false);
 });
 
 test('transcript: turns, slicing and rendering', () => {

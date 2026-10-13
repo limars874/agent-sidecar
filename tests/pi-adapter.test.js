@@ -395,11 +395,45 @@ test('extension: delivers an idle handoff with an active Pi wake', async (t) => 
   assert.equal(messages[0][1].triggerTurn, true);
   assert.equal(emitted[0].activity, 'handoff-triggered');
 
+  await waitFor(() => typeof nextMessage === 'function');
+  nextMessage({ value: { data: new TextEncoder().encode(JSON.stringify({
+    v: 1,
+    type: 'idle-handoff',
+    id: 'delivery-duplicate-before-completion',
+    instanceId: route.instanceId,
+    agent: 'pi',
+    session: PI_SESSION_ID,
+    planId: 'plan-1',
+    workTurn: 2,
+    progressId: null,
+    createdAt: '2026-10-12T12:00:01.000Z',
+    prompt: 'Duplicate handoff',
+  })) }, done: false });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(messages.length, 1, 'the same plan is not woken twice before completion');
+
   await pi.handlers.agent_settled({ aborted: true }, ctx);
   assert.equal(emitted.length, 1, 'an aborted handoff must not be marked completed');
   await pi.handlers.agent_settled({ aborted: false }, ctx);
   assert.equal(emitted[1].activity, 'handoff');
   assert.equal(emitted[1].handoffId, 'plan-1');
+
+  await waitFor(() => typeof nextMessage === 'function');
+  nextMessage({ value: { data: new TextEncoder().encode(JSON.stringify({
+    v: 1,
+    type: 'idle-handoff',
+    id: 'delivery-duplicate-after-completion',
+    instanceId: route.instanceId,
+    agent: 'pi',
+    session: PI_SESSION_ID,
+    planId: 'plan-1',
+    workTurn: 2,
+    progressId: null,
+    createdAt: '2026-10-12T12:00:02.000Z',
+    prompt: 'Completed handoff replay',
+  })) }, done: false });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(messages.length, 1, 'a completed plan is not woken again');
 });
 
 test('extension: keeps Feedback V1 when idle-handoff JetStream setup fails', async (t) => {

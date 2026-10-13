@@ -69,7 +69,8 @@ export function buildHandoffEnvelope({ event, plan, prompt, now = new Date() }) 
   const envelope = {
     v: HANDOFF_VERSION,
     type: HANDOFF_TYPE,
-    id: crypto.randomUUID(),
+    // plan.id 在重试时保持不变，避免服务端 ACK 丢失后生成重复唤醒消息。
+    id: plan.id,
     instanceId: event.handoffRoute.instanceId,
     agent: event.agent,
     session: event.session,
@@ -144,7 +145,8 @@ export function planIdleHandoff({ state, event, config, now = new Date(), planId
   if (sameAsChecked) {
     return { state: next, action: null };
   }
-  if (sameAsLast && current.plan?.status === 'pending' && hasRoute && planRouteMatches) {
+  if (sameAsLast && ['pending', 'error'].includes(current.plan?.status) && hasRoute && planRouteMatches) {
+    current.plan.status = 'pending';
     return {
       state: next,
       action: { type: 'schedule', plan: current.plan, previousPlan: current.plan.previousPlan ?? null },
@@ -196,11 +198,14 @@ export function markIdleHandoffScheduled(state, planId, now = new Date()) {
   return next;
 }
 
-export function markIdleHandoffScheduleFailed(state, planId, warning) {
+export function markIdleHandoffScheduleFailed(state, planId, warning, now = new Date()) {
   const next = structuredClone(state);
   const plan = next.idleHandoff?.plan;
   if (plan?.id === planId) {
-    plan.status = 'error';
+    // 发布结果可能未知：保留 pending 和原 plan id，让下一次事件用同一个 msgID 重试。
+    plan.status = 'pending';
+    plan.lastScheduleAttemptAt = new Date(now).toISOString();
+    plan.scheduleAttempts = (plan.scheduleAttempts ?? 0) + 1;
     next.idleHandoff.scheduleError = warning;
   }
   return next;
@@ -211,6 +216,9 @@ export function markIdleHandoffTriggered(state, { planId, now = new Date() }) {
   const current = next.idleHandoff ??= emptyIdleHandoffState();
   const plan = current.plan;
   if (!plan || plan.id !== planId) return { state: next, matched: false };
+  if (plan.status === 'triggered' && current.inFlight?.id === planId) {
+    return { state: next, matched: true };
+  }
   const triggeredAt = new Date(now).toISOString();
   plan.status = 'triggered';
   plan.triggeredAt = triggeredAt;
@@ -223,9 +231,8 @@ export function completeIdleHandoff(state, { handoffId, now = new Date() }) {
   const current = next.idleHandoff ??= emptyIdleHandoffState();
   const plan = current.plan;
   const inFlight = current.inFlight;
-  if (!inFlight || inFlight.id !== handoffId) {
-    if (!plan || plan.id !== handoffId) return { state: next, matched: false };
-  }
+  if (inFlight && inFlight.id !== handoffId) return { state: next, matched: false };
+  if (!inFlight && (!plan || plan.id !== handoffId)) return { state: next, matched: false };
   const check = {
     id: handoffId,
     work: inFlight?.work ?? plan.work,
@@ -312,7 +319,7 @@ export async function deleteHandoffConsumer(jsm, route) {
   }
 }
 
-export async function publishIdleHandoffPlan({ config, event, plan, previousPlan, now = new Date(), connect = connectNats, manager = jetstreamManager, jsFactory = jetstream }) {
+export async function publishIdleHandoffPlan({ config, event, plan, previousPlan, now = new Date(), connect = connectNats, manager = jetstreamManager, jsFactory = jetstream, timeoutMs = HANDOFF_TIMEOUT_MS }) {
   if (!event.handoffRoute) return { scheduled: false, warning: 'handoff route unavailable' };
   let connection;
   try {
@@ -323,9 +330,9 @@ export async function publishIdleHandoffPlan({ config, event, plan, previousPlan
       waitOnFirstConnect: true,
       timeout: HANDOFF_TIMEOUT_MS,
     });
-    connection = await withTimeout(connect(options), HANDOFF_TIMEOUT_MS, 'connect');
-    const jsm = await withTimeout(manager(connection), HANDOFF_TIMEOUT_MS, 'JetStream manager');
-    await withTimeout(ensureHandoffStream(jsm), HANDOFF_TIMEOUT_MS, 'JetStream stream');
+    connection = await withTimeout(connect(options), timeoutMs, 'connect');
+    const jsm = await withTimeout(manager(connection), timeoutMs, 'JetStream manager');
+    await withTimeout(ensureHandoffStream(jsm), timeoutMs, 'JetStream stream');
     const js = jsFactory(connection);
 
     if (previousPlan?.route?.scheduleSubject && previousPlan.route.controlSubject) {
@@ -335,21 +342,21 @@ export async function publishIdleHandoffPlan({ config, event, plan, previousPlan
       await withTimeout(js.publish(previousPlan.route.controlSubject, Empty, {
         msgID: `agent-sidecar-handoff-cancel-${previousPlan.id}`,
         headers: cancelHeaders,
-      }), HANDOFF_TIMEOUT_MS, 'cancel');
+      }), timeoutMs, 'cancel');
     }
 
     const built = buildHandoffEnvelope({ event, plan, prompt: plan.prompt, now });
     await withTimeout(js.publish(plan.route.scheduleSubject, built.payload, {
       msgID: `agent-sidecar-handoff-${plan.id}`,
       schedule: { specification: new Date(plan.deadline), target: plan.route.targetSubject },
-    }), HANDOFF_TIMEOUT_MS, 'schedule');
+    }), timeoutMs, 'schedule');
     return { scheduled: true, warning: null };
   } catch (err) {
     return { scheduled: false, warning: `idle handoff scheduling failed: ${safeFeedbackErrorMessage(err)}` };
   } finally {
     if (connection) {
       try {
-        await withTimeout(connection.close(), HANDOFF_TIMEOUT_MS, 'close');
+        await withTimeout(connection.close(), timeoutMs, 'close');
       } catch {
         // The short-lived worker is exiting; a close failure is already bounded.
       }
