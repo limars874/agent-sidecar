@@ -148,9 +148,9 @@ idleHandoff:
     written to or updated in a Handoff document. If not, do nothing.
 ```
 
-Each normal work completion cancels the previous pending schedule and creates one replacement. When the schedule fires, the Pi extension validates the session, work turn and progress id, then sends a distinct `agent-sidecar-handoff` custom message with `deliverAs: steer` and `triggerTurn: true`; this is intentionally allowed to wake an idle Pi agent. The agent decides whether to write or update a Handoff document and may write nothing. The resulting handoff lifecycle is not treated as new work, so it does not schedule another handoff or sidecar items.
+Each normal work completion cancels the previous pending schedule and creates one replacement on a plan-specific schedule subject. When the schedule fires, the Pi extension validates the session, work turn and progress id, then sends a distinct `agent-sidecar-handoff` custom message with `deliverAs: steer` and `triggerTurn: true`; this is intentionally allowed to wake an idle Pi agent. The agent decides whether to write or update a Handoff document and may write nothing. The resulting handoff lifecycle is not treated as new work, so it does not schedule another handoff or sidecar items.
 
-The schedule is one-shot and stateful per session: a new work batch re-arms it, one batch triggers at most one check, and check completion is tracked separately from whether a document was written. If cancellation or scheduling has an unknown result, the plan stays pending and retries the same plan id; a later work batch supersedes it. JetStream or delivery failures are explicit warnings; there is no polling or fallback trigger. Full boundary details are in [CONTRACT.md §5.3](CONTRACT.md#53-idle-handoff).
+The schedule is one-shot and stateful per session: a new work batch re-arms it, one batch triggers at most one check, and check completion is tracked separately from whether a document was written. If cancellation or scheduling has an unknown result, the plan stays pending and retries the same plan id; a later work batch supersedes it without reusing the old schedule subject. JetStream or delivery failures are explicit warnings; there is no polling or fallback trigger. Full boundary details are in [CONTRACT.md §5.3](CONTRACT.md#53-idle-handoff).
 
 ## Lifecycle title cleanup
 

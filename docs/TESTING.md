@@ -78,6 +78,8 @@ This check is required for a handoff implementation because mocks cannot prove J
 
 Expected: one eligible normal work batch creates at most one check; an unknown publish result does not allocate a new plan id; completion-before-trigger and duplicate lifecycle events do not corrupt state; the check actively wakes only the original idle Pi instance; no sidecar daemon, terminal injection, feedback message or self-loop appears. Record the NATS server version and the session JSONL path in the test report without committing credentials.
 
+A real NATS 2.15 cancellation/dedup race was also verified on an ephemeral `nats-server -js`: the old plan was published, replacement cancellation succeeded, the replacement schedule was accepted while its ACK was deliberately withheld, and the retry repeated the old cancellation plus the same replacement `msgID`. The replacement used a distinct plan-specific schedule subject and delivered exactly one `plan-new` message after the retry (`PASS`, NATS 2.15.0). This guards against a retry purge targeting the replacement schedule.
+
 Manual runner over an existing session file:
 
 ```sh

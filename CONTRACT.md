@@ -47,7 +47,7 @@ An adapter reports each finished turn of an agent session as one JSON object, pa
 | `activity` | `work` \| `handoff-triggered` \| `handoff` | no | Defaults to normal work. Handoff lifecycle events are internal and never schedule ordinary items or re-arm the idle timer. |
 | `handoffId` | string | no | Handoff plan id for `handoff-triggered` and `handoff` events. |
 | `feedbackRoute` | object | no | Ephemeral Pi delivery address for opted-in feedback. It contains `v: 1`, `instanceId`, `replySubject` and the matching `session`. Old events without it remain valid. The private subject is never written to normal logs. |
-| `handoffRoute` | object | no | Ephemeral Pi route used only when idle handoff is enabled. It contains `v: 1`, `instanceId`, `replySubject`, concrete `targetSubject`, `scheduleSubject`, `controlSubject` and the matching `session`. |
+| `handoffRoute` | object | no | Ephemeral Pi route used only when idle handoff is enabled. It contains `v: 1`, `instanceId`, `replySubject`, concrete `targetSubject`, base `scheduleSubject`, `controlSubject` and the matching `session`; each persisted plan derives its own plan-specific schedule subject from that base. |
 
 **Turn**: one user prompt and everything the agent did for it, until the agent is fully idle again. Model calls inside tool loops are not separate turns. A turn ends when the agent has settled (Pi: `agent_settled`). Aborted runs (Esc) are not reported.
 
@@ -257,7 +257,7 @@ The envelope is versioned JSON with `v: 1`, `type: "feedback"`, a unique `id`, `
 
 ### 5.3 Idle handoff
 
-When `idleHandoff.enabled` is true, a normal Pi work event with at least one user turn creates one delayed JetStream schedule. The worker ensures the `AGENT_SIDECAR_HANDOFF` file stream exists with `allow_msg_schedules` and `allow_rollup_hdrs`, then publishes an `@at <RFC3339>` message to a per-instance schedule subject. A new work progress cancels the old schedule by publishing `Nats-Schedule-Next: purge` and `Nats-Scheduler: <old schedule subject>` on a separate control subject before creating the replacement; fixed-subject overwrite is not used.
+When `idleHandoff.enabled` is true, a normal Pi work event with at least one user turn creates one delayed JetStream schedule. The worker ensures the `AGENT_SIDECAR_HANDOFF` file stream exists with `allow_msg_schedules` and `allow_rollup_hdrs`, then publishes an `@at <RFC3339>` message to a plan-specific schedule subject derived from the per-instance route. A new work progress cancels the old schedule by publishing `Nats-Schedule-Next: purge` and `Nats-Scheduler: <old plan-specific schedule subject>` on a separate control subject before creating the replacement; fixed-subject overwrite is not used, so a retried cancellation cannot purge the replacement schedule.
 
 The Pi extension owns a per-instance push consumer filtered to the target subject and delivered to its private reply subject. It validates `instanceId`, `session`, `agent`, `workTurn` and `progressId`, drops stale or duplicate messages, and only wakes Pi when `ctx.isIdle()` is true. The wake is a custom `agent-sidecar-handoff` message delivered with `deliverAs: "steer"` and `triggerTurn: true`; it is not a feedback message and is the only V2 path that intentionally starts an idle model turn. Handoff lifecycle events are recorded as `handoff-triggered` and `handoff`; neither schedules items nor re-arms the timer.
 
@@ -309,7 +309,7 @@ NATS JetStream also owns one shared `AGENT_SIDECAR_HANDOFF` file stream with sch
 - `running` is set while a job for the item is pending or running. Another event skips the item until it is cleared, unless it is stale: the recorded pid is dead, or it is older than 30 minutes.
 - If `turn` is ever lower than `completedThrough` (Pi `/tree` or a shorter branch), the completion cursor is reset to `turn`.
 - The lock is a file created with `O_EXCL` holding the owner's pid. It is taken over when that pid is dead; malformed lock files may be taken over after 30 s, while a live owner's lock is never stolen solely because it is old. Waiting for it gives up after 10 s.
-- `idleHandoff.lastWork` identifies the latest normal work batch. `plan` is the delayed schedule, `inFlight` is a delivered check, and `lastCheck` is the completed check. A plan's `previousPlan` retains the old schedule subject/id until replacement publication completes, so a crash can retry cancellation. A failed/unknown publication leaves the plan `pending` with the same id rather than generating a replacement id. Handoff state is independent of item cursors.
+- `idleHandoff.lastWork` identifies the latest normal work batch. `plan` is the delayed schedule, `inFlight` is a delivered check, and `lastCheck` is the completed check. Each plan has a distinct schedule subject; `previousPlan` retains the old subject/id until replacement publication completes, so a crash can retry cancellation without targeting the replacement. A failed/unknown publication leaves the plan `pending` with the same id rather than generating a replacement id. Handoff state is independent of item cursors.
 
 `runs.jsonl` lines: `{ at, job, item, fromTurn, toTurn, status: "ok"|"error", runner?, effort?, model?, written?, warnings?, error?, ms }`.
 

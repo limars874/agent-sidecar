@@ -76,6 +76,7 @@ test('idle handoff: one plan per new work progress and one completion', () => {
   const first = planIdleHandoff({ state: emptyState(), event, config, now: '2026-10-12T12:00:00.000Z', planId: 'plan-1' });
   assert.equal(first.action.type, 'schedule');
   assert.equal(first.action.plan.deadline, '2026-10-12T12:01:00.000Z');
+  assert.notEqual(first.action.plan.route.scheduleSubject, route.scheduleSubject);
   const scheduled = markIdleHandoffScheduled(first.state, 'plan-1', '2026-10-12T12:00:01.000Z');
   assert.equal(scheduled.idleHandoff.plan.status, 'scheduled');
 
@@ -100,6 +101,7 @@ test('idle handoff: one plan per new work progress and one completion', () => {
   });
   assert.equal(next.action.plan.id, 'plan-2');
   assert.equal(next.action.previousPlan, null);
+  assert.notEqual(next.action.plan.route.scheduleSubject, first.action.plan.route.scheduleSubject);
 });
 
 test('idle handoff: pending plans retry and replacement carries the cancellation target', () => {
@@ -135,13 +137,13 @@ test('idle handoff: pending plans retry and replacement carries the cancellation
 
 test('idle handoff publisher cancels the old schedule before publishing the replacement', async () => {
   const route = createHandoffRoute('s', { instanceId: 'instance-a', replySubject: '_INBOX.handoff-a' });
-  const previous = { id: 'plan-1', route: { ...route } };
+  const previous = { id: 'plan-1', route: { ...route, scheduleSubject: `${route.scheduleSubject}.plan.plan-1` } };
   const plan = {
     id: 'plan-2',
     work: { turn: 2, progressId: 'user-2' },
     deadline: '2026-10-12T12:01:00.000Z',
     prompt: 'Check handoff',
-    route: { ...route },
+    route: { ...route, scheduleSubject: `${route.scheduleSubject}.plan.plan-2` },
   };
   const event = { agent: 'pi', session: 's', turn: 2, handoffRoute: route };
   const calls = [];
@@ -174,8 +176,9 @@ test('idle handoff publisher cancels the old schedule before publishing the repl
   assert.equal(calls.length, 2);
   assert.equal(calls[0].subject, route.controlSubject);
   assert.equal(calls[0].options.headers.get('Nats-Schedule-Next'), 'purge');
-  assert.equal(calls[0].options.headers.get('Nats-Scheduler'), route.scheduleSubject);
-  assert.equal(calls[1].subject, route.scheduleSubject);
+  assert.equal(calls[0].options.headers.get('Nats-Scheduler'), previous.route.scheduleSubject);
+  assert.equal(calls[1].subject, plan.route.scheduleSubject);
+  assert.notEqual(calls[1].subject, calls[0].options.headers.get('Nats-Scheduler'));
   assert.equal(calls[1].options.schedule.target, route.targetSubject);
   assert.equal(calls[1].options.msgID, 'agent-sidecar-handoff-plan-2');
   assert.equal(closed, 1);

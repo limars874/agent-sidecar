@@ -59,6 +59,11 @@ export function validateHandoffRoute(raw, session) {
   };
 }
 
+function planScheduleSubject(route, planId) {
+  const suffix = String(planId).replace(/[^A-Za-z0-9_.-]/g, '_');
+  return `${route.scheduleSubject}.plan.${suffix}`;
+}
+
 export function buildHandoffEnvelope({ event, plan, prompt, now = new Date() }) {
   const text = String(prompt ?? '').trim();
   if (text === '') throw new Error('idleHandoff.prompt must not be empty');
@@ -177,7 +182,7 @@ export function planIdleHandoff({ state, event, config, now = new Date(), planId
     route: {
       instanceId: event.handoffRoute.instanceId,
       targetSubject: event.handoffRoute.targetSubject,
-      scheduleSubject: event.handoffRoute.scheduleSubject,
+      scheduleSubject: planScheduleSubject(event.handoffRoute, planId),
       controlSubject: event.handoffRoute.controlSubject,
     },
     previousPlan,
