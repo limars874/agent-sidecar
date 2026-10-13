@@ -26,7 +26,7 @@
 
 **D12 — Knowledge output is candidates, not knowledge.** Items append to files; nothing writes into a curated knowledge base. Review and promotion stay with a person.
 
-**D13 — Plain ESM JavaScript with small runtime dependencies.** Matches the user's other tools (tug), runs without a build step, and Pi loads `.js` extensions directly. `yaml` handles item/config parsing; the official `@nats-io/nats-core` and `@nats-io/transport-node` packages provide optional feedback transport without a broker-specific framework.
+**D13 — Plain ESM JavaScript with small runtime dependencies.** Matches the user's other tools (tug), runs without a build step, and Pi loads `.js` extensions directly. `yaml` handles item/config parsing; the official `@nats-io/nats-core`, `@nats-io/transport-node` and `@nats-io/jetstream` packages provide the optional NATS feedback and idle-handoff transports without a broker-specific framework.
 
 **D14 — Adapters and runners are separate.** An adapter reads the observed agent's session and reports its events; a runner performs one-shot model work. This lets a Pi session use a future Claude or Codex runner without replacing its Pi transcript adapter. The default runner remains `pi` for backward compatibility.
 
@@ -42,7 +42,11 @@
 
 **D20 — Session output grouping uses the original UTC creation month.** `{sessionMonth}` comes from the agent session header, not sidecar processing time, and remains stable across retries and month boundaries. The canonical metadata file is created at the first valid `event`, with `work` and manual `run` as idempotent fallbacks. It is fully prepared in a temporary file and published with exclusive creation; existing metadata is validated and never overwritten. Legacy/custom paths remain compatible and are not auto-migrated.
 
-**D22 — Feedback is best-effort NATS delivery, not a second output system.** An item opts in with `feedback: true`; the worker publishes a bounded advisory envelope only after a successful non-empty output. The Pi extension creates an ephemeral per-process route, validates `instanceId` and the current session, and uses `steer` while active or `nextTurn` while idle without triggering a turn. Broker failures warn but do not fail the item or roll back its checkpoint. V1 deliberately has no JetStream, persistence, outbox, RPC or resend queue.
+**D21 — Defer session-rewind consistency.** Pi's `/tree` rewind can change the active conversation path without automatically rolling back sidecar checkpoints or outputs. This is a known P2 correctness limitation, not a reason to add branch-level state management in v1; revisit it when rewind becomes frequent in real use.
+
+**D22 — Feedback is best-effort NATS delivery, not a second output system.** An item opts in with `feedback: true`; the worker publishes a bounded advisory envelope only after a successful non-empty output. The Pi extension creates an ephemeral per-process route, validates `instanceId` and the current session, and uses `steer` while active or `nextTurn` while idle without triggering a turn. Broker failures warn but do not fail the item or roll back its checkpoint. Feedback V1 deliberately has no JetStream, persistence, outbox, RPC or resend queue.
+
+**D23 — Idle handoff is an explicit, separate active-wake mode.** `idleHandoff.enabled` defaults to false. After each eligible normal work completion, NATS 2.15 JetStream schedules one delayed per-session check on a plan-specific subject; later work cancels and rebuilds it. The per-session lock serializes cancel-and-replace with other work events, and a persisted `pending` plan retries with the same plan id after a crash or unknown cancel/schedule result. Distinct schedule subjects ensure a retrying purge cannot target the replacement even when JetStream de-duplication is involved. The Pi extension validates the original instance, session, work turn and progress id, then uses `steer` plus `triggerTurn: true` to wake exactly that idle agent. The handoff envelope id is stable for the plan, and completed/duplicate or out-of-order lifecycle events are ignored or reconciled without waking twice. The handoff envelope and Pi custom message are distinct from Feedback V1. The agent decides whether to create or update a Handoff document, and may write nothing; the sidecar only tracks the check lifecycle. Handoff-triggered turns never count as normal work or re-arm the timer. There is no daemon, polling, terminal fallback, separate persistence/outbox or branch-specific handoff history.
 
 ## Known limitations
 
@@ -56,10 +60,67 @@
 - **Title only for Pi's own terminal and Herdr.** Outside Herdr, a future hook-only adapter cannot set the terminal title.
 - **Prompts leave the machine.** `{{transcript}}` is sent to whichever provider the chosen model belongs to.
 - **Cost control is by configuration only**: `everyTurns`, model choice, per-item `context.maxChars` and global `maxTranscriptChars`. There is no token or spend budget limit.
-- **No automatic output migration.** Switching an item to `{sessionMonth}` leaves its old output in place and starts a new path; manual migration is intentionally outside v1.
+- **No automatic output migration.** Switching an item to `{sessionMonth}` leaves its old output in place; manual migration is intentionally outside v1.
 - **Process cost.** Each finished turn starts one short Node process; each due prompt item one selected runner process (the v1 default is `pi -p`).
 - **Retries have no backoff or attempt cap.** A failed item remains due and retries on a later event; a worker killed mid-run is noticed only by pid/age (30 min). Duplicate side effects are still the responsibility of the item's output/runner design.
 - **Script items are trusted code.** They run with the user's environment and permissions, like any file the user places in `items/`.
 - **Pi runner CLI flags.** The `pi -p` flags were taken from Pi's source on GitHub; a Pi older than those flags fails every model call with `Unknown option` (visible in `runs.jsonl`). MCP servers configured for Pi still start in the child.
 - **`AGENT_SIDECAR_NODE`.** Inside the Pi binary, `process.execPath` is Pi, not Node, so the extension starts the CLI with `node` from `PATH` (or `AGENT_SIDECAR_NODE`).
 - **Feedback is best-effort and advisory.** A broker restart, missing subscriber or process shutdown can lose a message; the file output and checkpoint are authoritative. Feedback content is not automatically trusted or persisted by Pi.
+- **Idle handoff requires NATS JetStream scheduling.** The enabled mode requires a compatible NATS 2.15+ server and the shared handoff stream; if scheduling, cancellation, consumer setup or delivery fails, the failure is explicit and no polling or fallback wake is attempted.
+
+### Session rewind can desynchronize checkpoints and outputs
+
+**Status:** Known limitation; deferred.
+**Type:** Correctness issue.
+**Priority:** P2 (rewind is currently infrequent and does not block ongoing development).
+
+#### Background
+
+The sidecar currently schedules items and stores checkpoints primarily by the turn count on the session's active path. Normal conversations grow linearly. Pi also supports moving back to a historical tree node and continuing from there; this changes the active path, but existing checkpoints and output files do not automatically roll back.
+
+For an item that runs every two turns:
+
+```text
+Old path: ... → 21 → 22 → 23 → 24 → 25
+                                  ↑
+                           processed through 25
+
+Rewind to 21:
+New path: ... → 21 → 22' → 23'
+                              ↑
+                         should trigger again
+```
+
+If the checkpoint still reflects the old path, the new path may not trigger at the expected turn. Lowering a numeric checkpoint alone does not solve output contamination: `summary.md` may retain decisions from the abandoned path, and append-oriented `knowledge.md` may retain candidates extracted from it. Turn count comparison also cannot reliably identify every rewind after the new path grows back to the old count.
+
+#### Desired behavior
+
+When a rewind changes the active conversation prefix, the sidecar should eventually:
+
+1. Detect that the current active prefix no longer matches the processed prefix.
+2. Re-establish affected item checkpoints against the new path and restore the configured trigger cadence.
+3. Rebuild replace-mode summaries from the active path instead of inheriting abandoned-path state.
+4. Define an explicit consistency policy for append-mode knowledge output, avoiding abandoned-path records or meaningless duplicates.
+5. Preserve normal linear-session scheduling and existing output behavior.
+
+#### Design boundary
+
+Do not introduce a full Pi conversation-tree or multi-branch state system for this limitation. The intended future semantic is that a session has one current effective state: after a rewind, work continues from the new path, while abandoned paths do not need independent preservation or lossless switching.
+
+In particular, do not add branch-specific output directories, a summary snapshot tree, multi-branch switching/restoration, or a general version-control/rollback system. Prefer using the Pi JSONL `id`/`parentId` relationships to detect whether the processed prefix is still on the active path, rather than relying only on turn counts.
+
+#### Current decision and temporary workaround
+
+No implementation change is planned now because ordinary use is mostly linear, rewinds mainly occur after failed model calls or noisy error sequences, and the current summary/knowledge flow has been validated on long linear sessions. Until this is revisited, avoid rewinding before turns already processed by the sidecar. After a rewind, treat affected checkpoints and outputs as potentially inaccurate.
+
+#### Future implementation order and acceptance
+
+When real usage justifies the work, start with the smallest useful fix:
+
+1. Detect a processed-prefix change.
+2. Re-schedule items correctly on the new path.
+3. Safely rebuild replace-mode outputs.
+4. Decide append-mode consistency separately; do not introduce full branch management just to solve it.
+
+Acceptance example: after processing through turn 25, rewinding to turn 21 and continuing should cause an every-two-turn item to run again at new turn 23, and the resulting summary must not include abandoned-path content.

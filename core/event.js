@@ -1,5 +1,7 @@
 // The shared event (CONTRACT.md "Event"). Every adapter reports a finished
 // turn as one of these; nothing else crosses from an agent into the core.
+import { validateHandoffRoute } from './idle-handoff.js';
+
 export const EVENT_VERSION = 1;
 
 const optionalString = (v) => v === undefined || v === null || (typeof v === 'string' && v !== '');
@@ -30,6 +32,17 @@ export function validateEvent(raw, knownAgents) {
   if (raw.turn !== undefined && raw.turn !== null && !(Number.isInteger(raw.turn) && raw.turn >= 0)) {
     throw new Error('turn must be an integer >= 0 or null');
   }
+  if (raw.progressId !== undefined && raw.progressId !== null && !optionalString(raw.progressId)) {
+    throw new Error('progressId must be a non-empty string or null');
+  }
+  const activity = raw.activity ?? 'work';
+  if (!['work', 'handoff-triggered', 'handoff'].includes(activity)) {
+    throw new Error('activity must be "work", "handoff-triggered" or "handoff"');
+  }
+  if ((activity === 'handoff-triggered' || activity === 'handoff') && (typeof raw.handoffId !== 'string' || raw.handoffId === '')) {
+    throw new Error('handoffId is required for handoff events');
+  }
+  if (typeof raw.handoffId === 'string' && raw.handoffId.length > 256) throw new Error('handoffId is too long');
   const event = {
     v: EVENT_VERSION,
     agent: raw.agent,
@@ -39,7 +52,12 @@ export function validateEvent(raw, knownAgents) {
     pane: raw.pane ?? null,
     turn: raw.turn ?? null,
   };
+  if (raw.progressId !== undefined && raw.progressId !== null) event.progressId = raw.progressId;
+  if (raw.activity !== undefined) event.activity = activity;
+  if (raw.handoffId !== undefined && raw.handoffId !== null) event.handoffId = raw.handoffId;
   const feedbackRoute = validateFeedbackRoute(raw.feedbackRoute, event.session);
   if (feedbackRoute) event.feedbackRoute = feedbackRoute;
+  const handoffRoute = validateHandoffRoute(raw.handoffRoute, event.session);
+  if (handoffRoute) event.handoffRoute = handoffRoute;
   return event;
 }

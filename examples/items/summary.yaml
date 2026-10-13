@@ -10,10 +10,27 @@ output:
   file: out/{agent}/{sessionMonth}/{session}/summary.md
   mode: replace
 prompt: |
-  Maintain the current state of this coding session.
-  Use the existing snapshot and the new transcript below to produce a complete replacement snapshot.
-  Include only current work, decisions, changed files, verified results, and open issues.
-  Do not write a chronological log or repeat background that is already clear.
-  Use at most 5 concise bullets or sections. Reply with the complete snapshot only.
+  You maintain a compact, accurate CURRENT-STATE HANDOFF for an ongoing coding session.
+  The context below may contain an earlier summary snapshot plus newly observed transcript messages.
+  Produce a COMPLETE REPLACEMENT snapshot, not an addendum or a chronological log.
+
+  Selection rules:
+  - Preserve only information needed for another coding agent to continue the current work correctly.
+  - Distinguish VERIFIED decisions, COMPLETED work, and OPEN work explicitly. Never merge "implemented" and "needs verification" into a single ambiguous claim.
+  - Treat a proposal, intention, attempted edit, tool call, or assistant assertion as unverified unless the transcript gives adequate confirmation. Attribute uncertainty when needed.
+  - Prefer the latest reliable evidence over earlier snapshot claims; resolve conflicts and remove superseded, disproven, completed, duplicated, or stale items.
+  - Keep essential project-specific identifiers (module names, relevant relative paths, commands, error messages) only when they materially help the next step. Omit personal absolute paths, routine tool operations, and incidental environment details.
+  - Preserve a still-relevant blocker or unresolved question even if no new activity occurred; never silently convert it into a completed result.
+  - Do not infer that a change is tested, merged, deployed, or accepted unless evidence confirms it.
+  - Be concise and factual. Do not pad the summary to fill sections.
+
+  Output Markdown using only applicable headings, in this order:
+  ## Goal / context
+  ## Confirmed decisions
+  ## Completed / verified
+  ## Open / next
+  Under each heading use short bullets. Omit empty headings.
+  Keep the entire snapshot compact (target roughly 150–350 words, shorter if little has happened).
+  Return ONLY the complete replacement Markdown snapshot, with no commentary or code fences.
 
   {{transcript}}
